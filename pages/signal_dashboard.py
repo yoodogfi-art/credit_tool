@@ -15,6 +15,8 @@ _RATING_ORDER = [
     "B+", "B", "B-", "CCC+", "CCC", "CCC-", "CC", "C", "D",
 ]
 
+TENOR_YEARS = dict(zip(TENOR_LABELS, [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5]))
+
 
 def _rating_sort_key(r: str) -> tuple:
     try:
@@ -115,6 +117,37 @@ def _pairwise_matrix(names: list[str], series_map: dict[str, pd.Series], window:
                 hover[j][i] = f"{names[i]} vs {names[j]}: 데이터 없음"
 
     return z_mat, sp_mat, text, hover, breach_n, pair_n
+
+
+def macaulay_duration_years(tenor_years: float, yield_pct: float) -> float:
+    """Macaulay duration (years) of a par-priced, semiannual-coupon bond.
+
+    No other complexity (calls, floaters, amortization, day-count
+    conventions, ...) is modeled — a rough, consistent yardstick for
+    comparing spread "richness" across maturities, not a pricing tool.
+    """
+    if tenor_years is None or np.isnan(tenor_years) or tenor_years <= 0 or np.isnan(yield_pct):
+        return np.nan
+    m = 2  # semiannual coupons
+    n = max(1, round(tenor_years * m))
+    y = yield_pct / 100.0
+    if y <= 0:
+        return n / m  # degenerate case: fall back to time-weighted average maturity
+    per_rate = y / m
+    coupon = per_rate * 100.0
+    periods = np.arange(1, n + 1)
+    cash_flows = np.full(n, coupon, dtype=float)
+    cash_flows[-1] += 100.0
+    disc = (1 + per_rate) ** periods
+    pv = cash_flows / disc
+    price = pv.sum()
+    mac_dur_periods = (periods * pv).sum() / price
+    return mac_dur_periods / m
+
+
+def _latest_yield(dff: pd.DataFrame, cat: str, tenor: str) -> float:
+    s = dff[(dff["category"] == cat) & (dff["tenor"] == tenor)].sort_values("date")
+    return float(s.iloc[-1]["yield"]) if not s.empty else np.nan
 
 
 def _render_heatmap(names: list[str], z_mat: np.ndarray, text: list, hover: list) -> None:
@@ -226,3 +259,89 @@ def render(df: pd.DataFrame) -> None:
         )
         st.caption(f"{pair_s}개 쌍 중 {breach_s}개 임계값(±{z_thresh}) 초과")
         _render_heatmap(sector_labels, zs_mat, text_s, hover_s)
+
+    # -- Duration Spread -------------------------------------------------
+    st.markdown("---")
+    st.markdown("### Duration Spread")
+    st.caption("스프레드 ÷ 조정 듀레이션(6개월 이표, 액면발행 가정) — 만기별 스프레드의 '위험 대비 캐리'를 비교합니다.")
+
+    all_cats = sorted(dff["category"].unique().tolist())
+    default_base = next((c for c in all_cats if "국고채" in c), all_cats[0])
+    base_cat = st.selectbox("기준(Base) 계열", all_cats,
+                             index=all_cats.index(default_base) if default_base in all_cats else 0,
+                             key="dur_base_cat")
+
+    dur_pairs = sector_tenor_picker(all_sectors, TENOR_LABELS, "dur", default="all")
+    if not dur_pairs:
+        st.info("표시할 섹터 x 만기 조합을 하나 이상 선택하세요.")
+        return
+
+    dur_sel_sectors = sorted({s for s, _ in dur_pairs}, key=all_sectors.index)
+    dur_sel_tenors = sorted({t for _, t in dur_pairs}, key=TENOR_LABELS.index)
+
+    dur_cat_df = dff[dff["sector"].isin(dur_sel_sectors)][["category", "sector", "rating"]].drop_duplicates()
+    dur_cat_df = dur_cat_df[dur_cat_df["category"] != base_cat]
+    if dur_cat_df.empty:
+        st.warning("표시할 계열이 없습니다.")
+        return
+
+    dur_sector_rank = {s: i for i, s in enumerate(dur_sel_sectors)}
+    dur_cat_info = dur_cat_df.set_index("category")
+
+    def _dur_entity_key(cat: str) -> tuple:
+        info = dur_cat_info.loc[cat]
+        return (dur_sector_rank.get(info["sector"], 999), _rating_sort_key(info["rating"]))
+
+    dur_entities = sorted(dur_cat_info.index.unique().tolist(), key=_dur_entity_key)
+
+    dur_z_mat = np.full((len(dur_entities), len(dur_sel_tenors)), np.nan)
+    dur_text = [["" for _ in dur_sel_tenors] for _ in dur_entities]
+    dur_hover = [["" for _ in dur_sel_tenors] for _ in dur_entities]
+
+    for i, cat in enumerate(dur_entities):
+        for j, tenor in enumerate(dur_sel_tenors):
+            ent_y = _latest_yield(dff, cat, tenor)
+            base_y = _latest_yield(dff, base_cat, tenor)
+            if np.isnan(ent_y) or np.isnan(base_y):
+                dur_hover[i][j] = f"{cat} {tenor}: 데이터 없음"
+                continue
+            sp_bp = (ent_y - base_y) * 100
+            dur = macaulay_duration_years(TENOR_YEARS[tenor], ent_y)
+            if not dur or dur <= 0:
+                dur_hover[i][j] = f"{cat} {tenor}: 듀레이션 계산 불가"
+                continue
+            ratio = sp_bp / dur
+            dur_z_mat[i, j] = ratio
+            dur_text[i][j] = f"{ratio:+.0f}"
+            dur_hover[i][j] = (
+                f"{cat} {tenor} vs {base_cat}<br>"
+                f"스프레드: {sp_bp:+.1f}bp<br>듀레이션: {dur:.2f}y<br>"
+                f"스프레드/듀레이션: {ratio:+.1f}bp/y"
+            )
+
+    st.markdown(
+        f'<div style="background:#F7F8F5;border-radius:6px;padding:14px 18px;'
+        f'border-left:4px solid {DEEP_GREEN};margin:12px 0">'
+        f'<div style="font-size:11px;color:#888;margin-bottom:4px">종합</div>'
+        f'<div style="font-size:14px;font-weight:600;color:{DEEP_GREEN}">'
+        f'기준: {base_cat} &nbsp;|&nbsp; {len(dur_entities)}개 계열 x {len(dur_sel_tenors)}개 만기</div></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("셀 = (스프레드 vs 기준, bp) ÷ (듀레이션, 년). 값이 클수록 위험(듀레이션) 대비 캐리가 두텁다는 의미입니다.")
+
+    dur_fig = go.Figure(go.Heatmap(
+        z=dur_z_mat.tolist(), x=dur_sel_tenors, y=dur_entities,
+        text=dur_text, texttemplate="%{text}",
+        hovertext=dur_hover, hoverinfo="text",
+        colorscale=HEATMAP_DIVERG, zmid=0, showscale=True,
+        colorbar=dict(title=dict(text="bp/y", side="right"), thickness=12, len=0.8),
+        textfont=dict(size=10),
+    ))
+    dur_fig.update_layout(
+        height=max(320, len(dur_entities) * 34 + 60),
+        margin=dict(l=140, r=30, t=10, b=10),
+        font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=11),
+        xaxis=dict(side="top"),
+        plot_bgcolor="white", paper_bgcolor="white",
+    )
+    st.plotly_chart(dur_fig, use_container_width=True, config=PLOTLY_CONFIG)

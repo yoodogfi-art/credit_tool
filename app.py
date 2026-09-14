@@ -42,7 +42,7 @@ with st.sidebar:
     st.markdown("##### 메뉴")
     page = st.radio(
         "페이지",
-        ["Market View", "Sector Matrix", "Signal Dashboard", "Duration Spread"],
+        ["Market View", "Sector Matrix", "Signal Dashboard"],
         label_visibility="collapsed",
     )
     st.divider()
@@ -60,12 +60,11 @@ if uploaded is None:
         f'</div>',
         unsafe_allow_html=True,
     )
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     for col, title, desc in [
         (c1, "Market View",      "금리 시계열, 스프레드, 커브, 월간 변화 시각화"),
         (c2, "Sector Matrix",    "섹터 x 등급 x 만기 히트맵 + 자동 OW/NW/UW"),
-        (c3, "Signal Dashboard", "전체 계열 간 스프레드 / Z-score 매트릭스"),
-        (c4, "Duration Spread",  "스프레드 ÷ 조정 듀레이션 히트맵"),
+        (c3, "Signal Dashboard", "스프레드 / Z-score 매트릭스 + Duration Spread"),
     ]:
         col.markdown(
             f'<div style="border:1px solid #DDE4D8;border-radius:6px;padding:18px;background:#F7F8F5">'
@@ -119,7 +118,5 @@ elif page == "Sector Matrix":
     from pages.sector_matrix import render
 elif page == "Signal Dashboard":
     from pages.signal_dashboard import render
-elif page == "Duration Spread":
-    from pages.duration_spread import render
 
 render(df)

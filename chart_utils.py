@@ -127,23 +127,26 @@ def sector_tenor_picker(
     default: str = "single",
     default_tenor: str | None = None,
 ) -> list[tuple[str, str]]:
-    """Checkbox grid (sector rows x maturity columns) for picking which
-    sector/maturity combinations to include, instead of a single sector
-    list applied at one globally-selected maturity.
+    """Multiselect of "섹터 만기" combinations (same widget pattern as the
+    plain "계열" multiselect used elsewhere, e.g. Sector Matrix's
+    "카테고리 x 만기 히트맵"), letting the user pick any sector/maturity
+    combination independently instead of one maturity applied to every
+    selected sector.
 
-    default="all" checks every cell; default="single" checks only the
-    default_tenor column for every sector (falls back to the first tenor).
-    Returns the checked (sector, tenor) pairs.
+    default="all" preselects every combination; default="single"
+    preselects only the default_tenor column for every sector (falls back
+    to the first tenor). Returns the selected (sector, tenor) pairs.
     """
-    grid = pd.DataFrame(False, index=sectors, columns=tenors)
+    opt_map = {f"{s} {t}": (s, t) for s in sectors for t in tenors}
+    options = list(opt_map.keys())
+
     if default == "all":
-        grid.loc[:, :] = True
+        default_opts = options
     elif default == "single":
         dt = default_tenor if default_tenor in tenors else (tenors[0] if tenors else None)
-        if dt is not None:
-            grid[dt] = True
+        default_opts = [f"{s} {dt}" for s in sectors if f"{s} {dt}" in opt_map] if dt else []
+    else:
+        default_opts = []
 
-    with st.expander("섹터 x 만기 선택 (표시할 조합에 체크)", expanded=False):
-        edited = st.data_editor(grid, key=f"{key}_sector_tenor_grid", use_container_width=True)
-
-    return [(s, t) for s in sectors for t in tenors if bool(edited.loc[s, t])]
+    selected = st.multiselect("섹터 x 만기 조합", options, default=default_opts, key=f"{key}_sector_tenor")
+    return [opt_map[o] for o in selected]
