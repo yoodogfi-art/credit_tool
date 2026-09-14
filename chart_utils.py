@@ -127,26 +127,49 @@ def sector_tenor_picker(
     default: str = "single",
     default_tenor: str | None = None,
 ) -> list[tuple[str, str]]:
-    """Multiselect of "섹터 만기" combinations (same widget pattern as the
-    plain "계열" multiselect used elsewhere, e.g. Sector Matrix's
-    "카테고리 x 만기 히트맵"), letting the user pick any sector/maturity
-    combination independently instead of one maturity applied to every
-    selected sector.
+    """One "계열"-style multiselect of sectors per maturity, laid out in a
+    grid so every maturity is its own clearly-labeled, always-visible
+    control (a single flat "sector maturity" multiselect made it easy to
+    lose track of which maturities were actually selected). Includes a
+    "전체 선택" / "전체 해제" button pair to bulk (un)select everything.
 
-    default="all" preselects every combination; default="single"
-    preselects only the default_tenor column for every sector (falls back
-    to the first tenor). Returns the selected (sector, tenor) pairs.
+    default="all" preselects every sector for every maturity; default="single"
+    preselects every sector only for default_tenor (falls back to the first
+    tenor), leaving other maturities empty. Returns the selected (sector,
+    tenor) pairs.
     """
-    opt_map = {f"{s} {t}": (s, t) for s in sectors for t in tenors}
-    options = list(opt_map.keys())
+    state_keys = [f"{key}_tenor_{t}" for t in tenors]
 
-    if default == "all":
-        default_opts = options
-    elif default == "single":
-        dt = default_tenor if default_tenor in tenors else (tenors[0] if tenors else None)
-        default_opts = [f"{s} {dt}" for s in sectors if f"{s} {dt}" in opt_map] if dt else []
-    else:
-        default_opts = []
+    with st.expander("섹터 x 만기 선택 (만기별로 표시할 섹터를 선택하세요)", expanded=True):
+        b1, b2, _ = st.columns([1, 1, 4])
+        if b1.button("전체 선택", key=f"{key}_pick_all", use_container_width=True):
+            for sk in state_keys:
+                st.session_state[sk] = list(sectors)
+        if b2.button("전체 해제", key=f"{key}_pick_clear", use_container_width=True):
+            for sk in state_keys:
+                st.session_state[sk] = []
 
-    selected = st.multiselect("섹터 x 만기 조합", options, default=default_opts, key=f"{key}_sector_tenor")
-    return [opt_map[o] for o in selected]
+        default_tenor = default_tenor if default_tenor in tenors else (tenors[0] if tenors else None)
+
+        pairs: list[tuple[str, str]] = []
+        per_row = 5
+        for row_start in range(0, len(tenors), per_row):
+            row_tenors = tenors[row_start:row_start + per_row]
+            cols = st.columns(len(row_tenors))
+            for col, tenor in zip(cols, row_tenors):
+                tenor_key = f"{key}_tenor_{tenor}"
+                # Only pass `default` before session_state holds a value for
+                # this widget (first render) — once it exists (from a prior
+                # run or the select/clear-all buttons above), passing both
+                # triggers a Streamlit widget-policy warning.
+                kwargs = {}
+                if tenor_key not in st.session_state:
+                    if default == "all" or (default == "single" and tenor == default_tenor):
+                        kwargs["default"] = list(sectors)
+                    else:
+                        kwargs["default"] = []
+                with col:
+                    sel = st.multiselect(tenor, sectors, key=tenor_key, **kwargs)
+                pairs.extend((s, tenor) for s in sel)
+
+    return pairs

@@ -58,10 +58,11 @@ def entities_from_pairs(dff: pd.DataFrame, pairs: list[tuple[str, str]]) -> pd.D
 
 
 def _rolling_z(spread: pd.Series, window: int) -> pd.Series:
-    # A small, mostly-fixed floor (rather than a fraction of the window) so
-    # pairs with a shorter overlap than the full window still get a Z-score
-    # instead of going blank — any real overlap should produce a number.
-    min_periods = min(len(spread), max(5, min(10, window)))
+    # 2 is the bare statistical minimum for a standard deviation — anything
+    # stricter blanks out cells purely because a pair's overlap or a
+    # thinly-reported maturity has fewer rows than an arbitrary threshold,
+    # even though there's enough data to produce a real (if noisier) number.
+    min_periods = min(len(spread), 2)
     mean = spread.rolling(window, min_periods=min_periods).mean()
     std = spread.rolling(window, min_periods=min_periods).std(ddof=0)
     z = (spread - mean) / std
@@ -71,7 +72,7 @@ def _rolling_z(spread: pd.Series, window: int) -> pd.Series:
 def _spread_and_z(a: pd.Series, b: pd.Series, window: int) -> tuple[float, float]:
     """Return (latest spread bp, latest rolling z) for (b - a)."""
     idx = a.index.intersection(b.index)
-    if len(idx) < 2:
+    if len(idx) == 0:
         return np.nan, np.nan
     spread = ((b - a) * 100).reindex(idx).dropna()
     if len(spread) < 2:
@@ -318,6 +319,10 @@ def render(df: pd.DataFrame) -> None:
                 f"스프레드: {sp_bp:+.1f}bp<br>듀레이션: {dur:.2f}y<br>"
                 f"스프레드/듀레이션: {ratio:+.1f}bp/y"
             )
+
+    empty_tenors = [t for j, t in enumerate(dur_sel_tenors) if np.all(np.isnan(dur_z_mat[:, j]))]
+    if empty_tenors:
+        st.warning(f"선택한 기간/섹터에 다음 만기 데이터가 없습니다: {', '.join(empty_tenors)}")
 
     st.markdown(
         f'<div style="background:#F7F8F5;border-radius:6px;padding:14px 18px;'
