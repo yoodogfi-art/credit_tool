@@ -130,27 +130,19 @@ def sector_tenor_picker(
     """One "계열"-style multiselect of sectors per maturity, laid out in a
     grid so every maturity is its own clearly-labeled, always-visible
     control (a single flat "sector maturity" multiselect made it easy to
-    lose track of which maturities were actually selected). Includes a
-    "전체 선택" / "전체 해제" button pair to bulk (un)select everything.
+    lose track of which maturities were actually selected). Each maturity
+    gets its own small "전체" button to select every sector for just that
+    maturity — deselecting is a normal multiselect interaction, so there's
+    no separate clear button.
 
     default="all" preselects every sector for every maturity; default="single"
     preselects every sector only for default_tenor (falls back to the first
     tenor), leaving other maturities empty. Returns the selected (sector,
     tenor) pairs.
     """
-    state_keys = [f"{key}_tenor_{t}" for t in tenors]
+    default_tenor = default_tenor if default_tenor in tenors else (tenors[0] if tenors else None)
 
     with st.expander("섹터 x 만기 선택 (만기별로 표시할 섹터를 선택하세요)", expanded=True):
-        b1, b2, _ = st.columns([1, 1, 4])
-        if b1.button("전체 선택", key=f"{key}_pick_all", use_container_width=True):
-            for sk in state_keys:
-                st.session_state[sk] = list(sectors)
-        if b2.button("전체 해제", key=f"{key}_pick_clear", use_container_width=True):
-            for sk in state_keys:
-                st.session_state[sk] = []
-
-        default_tenor = default_tenor if default_tenor in tenors else (tenors[0] if tenors else None)
-
         pairs: list[tuple[str, str]] = []
         per_row = 5
         for row_start in range(0, len(tenors), per_row):
@@ -158,17 +150,20 @@ def sector_tenor_picker(
             cols = st.columns(len(row_tenors))
             for col, tenor in zip(cols, row_tenors):
                 tenor_key = f"{key}_tenor_{tenor}"
-                # Only pass `default` before session_state holds a value for
-                # this widget (first render) — once it exists (from a prior
-                # run or the select/clear-all buttons above), passing both
-                # triggers a Streamlit widget-policy warning.
-                kwargs = {}
-                if tenor_key not in st.session_state:
-                    if default == "all" or (default == "single" and tenor == default_tenor):
-                        kwargs["default"] = list(sectors)
-                    else:
-                        kwargs["default"] = []
                 with col:
+                    if st.button("전체", key=f"{tenor_key}_all", use_container_width=True,
+                                 help=f"{tenor}: 전체 섹터 선택"):
+                        st.session_state[tenor_key] = list(sectors)
+                    # Only pass `default` before session_state holds a value
+                    # for this widget (first render) — once it exists (from
+                    # a prior run or the 전체 button above), passing both
+                    # triggers a Streamlit widget-policy warning.
+                    kwargs = {}
+                    if tenor_key not in st.session_state:
+                        if default == "all" or (default == "single" and tenor == default_tenor):
+                            kwargs["default"] = list(sectors)
+                        else:
+                            kwargs["default"] = []
                     sel = st.multiselect(tenor, sectors, key=tenor_key, **kwargs)
                 pairs.extend((s, tenor) for s in sel)
 
