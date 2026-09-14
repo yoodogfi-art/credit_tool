@@ -8,15 +8,8 @@ import streamlit as st
 from assets.styles import DEEP_GREEN, HEATMAP_RATE, HEATMAP_DIVERG, PLOTLY_TEMPLATE
 from data.loader import TENOR_LABELS
 from chart_utils import PLOTLY_CONFIG, date_range_picker
-from scoring.engine import compute_score
 
 _ALL_RATINGS = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-"]
-
-_VIEW_CFG = {
-    "OW": {"label": "비중확대", "bg": "#EEF4EB", "fg": "#2D3F38", "border": "#8DC175"},
-    "NW": {"label": "중립",     "bg": "#F5F5F5", "fg": "#5A6B60", "border": "#C0C8C0"},
-    "UW": {"label": "비중축소", "bg": "#F5EDEB", "fg": "#8A3030", "border": "#E0A898"},
-}
 
 
 def _init_state(df: pd.DataFrame) -> None:
@@ -158,43 +151,6 @@ def render(df: pd.DataFrame) -> None:
         for sec in sector_order
     ]
     st.dataframe(pd.DataFrame(rows).set_index("섹터"), use_container_width=True)
-
-    st.markdown("---")
-    st.markdown("#### 투자의견")
-    score_cats = st.multiselect(
-        "분석 계열", all_cats,
-        default=[c for c in all_cats if "회사채" in c][:4],
-        key="score_cats",
-    )
-
-    if score_cats:
-        cols = st.columns(min(len(score_cats), 3))
-        for i, cat in enumerate(score_cats):
-            s = dff[(dff["category"] == cat) & (dff["tenor"] == tenor)]
-            if s.empty:
-                continue
-            ys  = s.set_index("date")["yield"].sort_index()
-            sc  = compute_score(ys)
-            cfg = _VIEW_CFG[sc["view"]]
-            with cols[i % 3]:
-                st.markdown(
-                    f'<div style="border:1px solid {cfg["border"]};border-radius:5px;'
-                    f'padding:14px 16px;margin:6px 0;background:{cfg["bg"]}">'
-                    f'<div style="font-size:11px;color:#6B7B6E;margin-bottom:4px">{cat}</div>'
-                    f'<div style="font-size:18px;font-weight:700;color:{cfg["fg"]};margin-bottom:8px">'
-                    f'{cfg["label"]}</div>'
-                    f'<div style="font-size:11px;color:#555;line-height:1.9">'
-                    f'금리 레벨 {sc["rate_pct"]*100:.0f}%ile ({sc["rate_score"]:+d})<br>'
-                    f'스프레드 {sc["spread_pct"]*100:.0f}%ile ({sc["spread_score"]:+d})<br>'
-                    f'모멘텀 Z {sc["momentum_z"]:.2f} ({sc["momentum_score"]:+d})<br>'
-                    f'변동성 ({sc["vol_score"]:+d})<br>'
-                    f'<b>합계 {sc["total_score"]:+d}</b>'
-                    f'</div>'
-                    f'<div style="font-size:10px;color:#888;margin-top:8px;padding-top:6px;'
-                    f'border-top:1px solid {cfg["border"]}">{sc["comment"]}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
 
     st.markdown("---")
     st.markdown("#### 카테고리 x 만기 히트맵")
