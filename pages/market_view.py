@@ -1,5 +1,6 @@
 """Page: Market View"""
 
+import copy
 import datetime
 
 import numpy as np
@@ -256,10 +257,38 @@ def _tab_spread(df: pd.DataFrame) -> None:
     if use_sec:
         _add_policy_traces(fig, pr_df, d_start, d_end, secondary_y=True)
 
-    base_layout(fig, f"{cat_a} {tenor} 금리 및 스프레드", 450)
+    # --- Title shown in the app only (kept OUT of the downloaded PNG) ---
+    chart_title = f"{cat_a} {tenor} 금리 및 스프레드"
+    st.markdown(
+        f'<div style="font-weight:700;color:{DEEP_GREEN};font-size:14px;margin:4px 0 2px">'
+        f"{chart_title}</div>",
+        unsafe_allow_html=True,
+    )
+
+    base_layout(fig, "", 470)  # empty layout title -> no title in export
+    # Move the legend below the plot so series/legend never overlap the data
+    fig.update_layout(
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.18,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=12, color="#1A1A1A"),
+            bgcolor="rgba(255,255,255,0)",
+            borderwidth=0,
+        ),
+        margin=dict(l=58, r=64, t=20, b=80),
+    )
     fig.update_yaxes(title_text="스프레드(bp)", ticksuffix="bp", secondary_y=False, rangemode="tozero")
     fig.update_yaxes(title_text="금리(%)", ticksuffix="%", secondary_y=True, showgrid=False)
-    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+
+    # Per-tab export config: PNG uses the (empty) layout title, so no title is baked in.
+    spread_cfg = copy.deepcopy(PLOTLY_CONFIG)
+    spread_cfg["toImageButtonOptions"]["filename"] = f"spread_{cat_a}_{tenor}".replace(" ", "_")
+    spread_cfg["toImageButtonOptions"]["height"] = 470
+
+    st.plotly_chart(fig, use_container_width=True, config=spread_cfg)
 
     last_sp = merged["sp"].iloc[-1]
     avg_sp  = merged["sp"].mean()
