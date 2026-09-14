@@ -64,5 +64,12 @@ hr { border-color: #DDE4D8 !important; margin: 12px 0 !important; }
     border-radius: 4px;
     padding: 10px 14px;
 }
+/* Hide the previous page's stale/ghost content during a rerun instead of
+   fading it in place — this app swaps whole unrelated pages, so a dimmed
+   leftover of the old page reads as broken rather than "loading". */
+[data-testid="stElementContainer"][data-stale="true"],
+[data-testid="stVerticalBlock"][data-stale="true"] {
+    display: none !important;
+}
 </style>
 """
