@@ -14,7 +14,7 @@ import streamlit as st
 
 from assets.styles import DEEP_GREEN, HEATMAP_DIVERG
 from data.loader import TENOR_LABELS, POLICY_RATE_SECTOR
-from chart_utils import PLOTLY_CONFIG, date_range_picker
+from chart_utils import PLOTLY_CONFIG, date_range_picker, sector_tenor_picker
 
 TENOR_YEARS = dict(zip(TENOR_LABELS, [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5]))
 
@@ -81,16 +81,22 @@ def render(df: pd.DataFrame) -> None:
     all_cats = sorted(dff["category"].unique().tolist())
     default_base = next((c for c in all_cats if "국고채" in c), all_cats[0])
 
-    c1, c2 = st.columns([2, 3])
-    base_cat = c1.selectbox("기준(Base) 계열", all_cats,
+    base_cat = st.selectbox("기준(Base) 계열", all_cats,
                              index=all_cats.index(default_base) if default_base in all_cats else 0,
                              key="dur_base_cat")
 
     all_sectors = sorted(s for s in dff["sector"].unique() if s != POLICY_RATE_SECTOR)
-    sel_sectors = c2.multiselect("표시할 섹터", all_sectors, default=all_sectors, key="dur_sectors")
-    if not sel_sectors:
-        st.info("표시할 섹터를 하나 이상 선택하세요.")
+    if not all_sectors:
+        st.warning("표시할 계열이 없습니다.")
         return
+
+    pairs = sector_tenor_picker(all_sectors, TENOR_LABELS, "dur", default="all")
+    if not pairs:
+        st.info("표시할 섹터 x 만기 조합을 하나 이상 선택하세요.")
+        return
+
+    sel_sectors = sorted({s for s, _ in pairs}, key=all_sectors.index)
+    sel_tenors = sorted({t for _, t in pairs}, key=TENOR_LABELS.index)
 
     cat_df = dff[dff["sector"].isin(sel_sectors)][["category", "sector", "rating"]].drop_duplicates()
     cat_df = cat_df[cat_df["category"] != base_cat]
@@ -107,12 +113,12 @@ def render(df: pd.DataFrame) -> None:
 
     entities = sorted(cat_info.index.unique().tolist(), key=_entity_key)
 
-    z_mat = np.full((len(entities), len(TENOR_LABELS)), np.nan)
-    text = [["" for _ in TENOR_LABELS] for _ in entities]
-    hover = [["" for _ in TENOR_LABELS] for _ in entities]
+    z_mat = np.full((len(entities), len(sel_tenors)), np.nan)
+    text = [["" for _ in sel_tenors] for _ in entities]
+    hover = [["" for _ in sel_tenors] for _ in entities]
 
     for i, cat in enumerate(entities):
-        for j, tenor in enumerate(TENOR_LABELS):
+        for j, tenor in enumerate(sel_tenors):
             ent_y = _latest_yield(dff, cat, tenor)
             base_y = _latest_yield(dff, base_cat, tenor)
             if np.isnan(ent_y) or np.isnan(base_y):
@@ -137,13 +143,13 @@ def render(df: pd.DataFrame) -> None:
         f'border-left:4px solid {DEEP_GREEN};margin:12px 0">'
         f'<div style="font-size:11px;color:#888;margin-bottom:4px">종합</div>'
         f'<div style="font-size:14px;font-weight:600;color:{DEEP_GREEN}">'
-        f'기준: {base_cat} &nbsp;|&nbsp; {len(entities)}개 계열 x {len(TENOR_LABELS)}개 만기</div></div>',
+        f'기준: {base_cat} &nbsp;|&nbsp; {len(entities)}개 계열 x {len(sel_tenors)}개 만기</div></div>',
         unsafe_allow_html=True,
     )
     st.caption("셀 = (스프레드 vs 기준, bp) ÷ (듀레이션, 년). 값이 클수록 위험(듀레이션) 대비 캐리가 두텁다는 의미입니다.")
 
     fig = go.Figure(go.Heatmap(
-        z=z_mat.tolist(), x=TENOR_LABELS, y=entities,
+        z=z_mat.tolist(), x=sel_tenors, y=entities,
         text=text, texttemplate="%{text}",
         hovertext=hover, hoverinfo="text",
         colorscale=HEATMAP_DIVERG, zmid=0, showscale=True,

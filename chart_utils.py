@@ -118,3 +118,32 @@ def date_range_picker(
     if start_d > end_d:
         start_d, end_d = end_d, start_d
     return pd.Timestamp(start_d), pd.Timestamp(end_d)
+
+
+def sector_tenor_picker(
+    sectors: list[str],
+    tenors: list[str],
+    key: str,
+    default: str = "single",
+    default_tenor: str | None = None,
+) -> list[tuple[str, str]]:
+    """Checkbox grid (sector rows x maturity columns) for picking which
+    sector/maturity combinations to include, instead of a single sector
+    list applied at one globally-selected maturity.
+
+    default="all" checks every cell; default="single" checks only the
+    default_tenor column for every sector (falls back to the first tenor).
+    Returns the checked (sector, tenor) pairs.
+    """
+    grid = pd.DataFrame(False, index=sectors, columns=tenors)
+    if default == "all":
+        grid.loc[:, :] = True
+    elif default == "single":
+        dt = default_tenor if default_tenor in tenors else (tenors[0] if tenors else None)
+        if dt is not None:
+            grid[dt] = True
+
+    with st.expander("섹터 x 만기 선택 (표시할 조합에 체크)", expanded=False):
+        edited = st.data_editor(grid, key=f"{key}_sector_tenor_grid", use_container_width=True)
+
+    return [(s, t) for s in sectors for t in tenors if bool(edited.loc[s, t])]
