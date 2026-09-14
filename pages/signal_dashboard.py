@@ -1,4 +1,4 @@
-"""Page: Signal Dashboard — base vs. every sector/rating spread heatmap."""
+"""Page: Signal Dashboard — entity x entity spread / Z-score matrix."""
 
 import numpy as np
 import pandas as pd
@@ -39,12 +39,12 @@ def _rolling_z(spread: pd.Series, window: int) -> pd.Series:
     return z.replace([np.inf, -np.inf], np.nan)
 
 
-def _spread_and_z(base: pd.Series, cmp_series: pd.Series, window: int) -> tuple[float, float]:
-    """Return (latest spread bp, latest rolling z) vs base."""
-    idx = base.index.intersection(cmp_series.index)
+def _spread_and_z(a: pd.Series, b: pd.Series, window: int) -> tuple[float, float]:
+    """Return (latest spread bp, latest rolling z) for (b - a)."""
+    idx = a.index.intersection(b.index)
     if len(idx) < 2:
         return np.nan, np.nan
-    spread = ((cmp_series - base) * 100).reindex(idx).dropna()
+    spread = ((b - a) * 100).reindex(idx).dropna()
     if spread.empty:
         return np.nan, np.nan
     z = _rolling_z(spread, window).dropna()
@@ -56,10 +56,7 @@ def _spread_and_z(base: pd.Series, cmp_series: pd.Series, window: int) -> tuple[
 # ---------------------------------------------------------------------------
 def render(df: pd.DataFrame) -> None:
     st.header("Signal Dashboard")
-    st.caption("Base 계열 대비 전체 섹터 x 등급 스프레드 / Z-score 히트맵")
-
-    all_cats = sorted(df["category"].unique().tolist())
-    default_base = next((c for c in all_cats if "국고채" in c), all_cats[0])
+    st.caption("전체 계열 간 스프레드 / Z-score 매트릭스 (상관관계 매트릭스와 동일한 구성)")
 
     st.markdown("**분석 기간**")
     d_start, d_end = date_range_picker(df, "sig")
@@ -68,109 +65,100 @@ def render(df: pd.DataFrame) -> None:
         st.warning("선택한 기간에 데이터가 없습니다.")
         return
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     tenor = c1.selectbox("만기", TENOR_LABELS,
                           index=TENOR_LABELS.index("3Y") if "3Y" in TENOR_LABELS else 0,
                           key="sig_tenor")
-    base_cat = c2.selectbox("기준(Base) 계열", all_cats,
-                             index=all_cats.index(default_base) if default_base in all_cats else 0,
-                             key="sig_base_cat")
-    z_window = c3.number_input("Z-score 산출기간 (영업일)", value=60, min_value=10, max_value=500, key="sig_zwin")
-    z_thresh = c4.number_input("Z-score 임계값", value=2.0, min_value=0.5, max_value=5.0, step=0.1, key="sig_zthresh")
+    z_window = c2.number_input("Z-score 산출기간 (영업일)", value=60, min_value=10, max_value=500, key="sig_zwin")
+    z_thresh = c3.number_input("Z-score 임계값", value=2.0, min_value=0.5, max_value=5.0, step=0.1, key="sig_zthresh")
 
-    # Only sectors that actually carry a rating can sit on the grid
-    # (government/policy-rate style series have no rating and are excluded).
-    rated_sectors = sorted(
-        s for s in dff["sector"].unique()
-        if s != POLICY_RATE_SECTOR and (dff.loc[dff["sector"] == s, "rating"] != "").any()
-    )
-    if not rated_sectors:
-        st.warning("등급 구분이 있는 계열이 없습니다.")
+    all_sectors = sorted(s for s in dff["sector"].unique() if s != POLICY_RATE_SECTOR)
+    if not all_sectors:
+        st.warning("표시할 계열이 없습니다.")
         return
 
     sel_sectors = st.multiselect(
-        "표시할 섹터 (해제하면 히트맵에서 제외)", rated_sectors,
-        default=rated_sectors, key="sig_sectors",
+        "표시할 섹터 (해제하면 매트릭스에서 제외)", all_sectors,
+        default=all_sectors, key="sig_sectors",
     )
     if not sel_sectors:
         st.info("표시할 섹터를 하나 이상 선택하세요.")
         return
 
-    ratings_present = sorted(
-        {r for r in dff.loc[dff["sector"].isin(sel_sectors), "rating"].unique() if r},
-        key=_rating_sort_key,
-    )
-    if not ratings_present:
-        st.warning("선택한 섹터에 등급 데이터가 없습니다.")
+    tdf = dff[(dff["tenor"] == tenor) & (dff["sector"].isin(sel_sectors))]
+    if tdf.empty:
+        st.warning(f"선택한 섹터에 {tenor} 데이터가 없습니다.")
         return
 
-    base_series = _series(dff, base_cat, tenor)
-    if base_series.empty:
-        st.warning(f"Base 계열의 {tenor} 데이터가 없습니다.")
-        return
+    cat_info = tdf[["category", "sector", "rating"]].drop_duplicates().set_index("category")
+    sector_rank = {s: i for i, s in enumerate(sel_sectors)}
 
-    cats_present = set(dff["category"].unique())
-    z_grid, sp_grid, text_z, text_sp, hover = [], [], [], [], []
-    breach_n, total_n = 0, 0
-    for sec in sel_sectors:
-        z_row, sp_row, tz_row, ts_row, hv_row = [], [], [], [], []
-        for rat in ratings_present:
-            cat = f"{sec} {rat}".strip()
-            if cat == base_cat or cat not in cats_present:
-                z_row.append(np.nan); sp_row.append(np.nan)
-                tz_row.append(""); ts_row.append("")
-                hv_row.append(f"{sec} {rat}: 데이터 없음")
-                continue
-            cmp_series = _series(dff, cat, tenor)
-            sp_now, z_now = _spread_and_z(base_series, cmp_series, int(z_window))
-            z_row.append(z_now); sp_row.append(sp_now)
-            tz_row.append(f"{z_now:+.2f}" if not np.isnan(z_now) else "")
-            ts_row.append(f"{sp_now:+.0f}" if not np.isnan(sp_now) else "")
-            hv_row.append(
-                f"{cat} vs {base_cat}<br>스프레드: "
-                f"{sp_now:+.1f}bp<br>Z-score: {z_now:+.2f}"
-                if not np.isnan(sp_now) else f"{cat}: 데이터 없음"
-            )
-            if not np.isnan(z_now):
-                total_n += 1
+    def _entity_key(cat: str) -> tuple:
+        info = cat_info.loc[cat]
+        return (sector_rank.get(info["sector"], 999), _rating_sort_key(info["rating"]))
+
+    entities = sorted(cat_info.index.unique().tolist(), key=_entity_key)
+    n = len(entities)
+    if n < 2:
+        st.warning("비교할 계열이 2개 이상 필요합니다.")
+        return
+    if n > 30:
+        st.caption(f"⚠ {n}개 계열이 선택되어 매트릭스가 큽니다. 섹터를 줄이면 더 보기 편합니다.")
+
+    series_map = {cat: _series(dff, cat, tenor) for cat in entities}
+
+    z_mat = np.full((n, n), np.nan)
+    sp_mat = np.full((n, n), np.nan)
+    text = [["" for _ in range(n)] for _ in range(n)]
+    hover = [["" for _ in range(n)] for _ in range(n)]
+
+    breach_n, pair_n = 0, 0
+    for i in range(n):
+        z_mat[i, i] = 0.0
+        sp_mat[i, i] = 0.0
+        hover[i][i] = entities[i]
+        for j in range(i + 1, n):
+            sp_now, z_now = _spread_and_z(series_map[entities[i]], series_map[entities[j]], int(z_window))
+            sp_mat[i, j], sp_mat[j, i] = sp_now, (-sp_now if not np.isnan(sp_now) else np.nan)
+            z_mat[i, j], z_mat[j, i] = z_now, (-z_now if not np.isnan(z_now) else np.nan)
+
+            if not np.isnan(sp_now):
+                text[i][j] = f"{sp_now:+.0f}bp<br>Z{z_now:+.1f}"
+                text[j][i] = f"{-sp_now:+.0f}bp<br>Z{-z_now:+.1f}"
+                hover[i][j] = f"{entities[j]} − {entities[i]}<br>스프레드: {sp_now:+.1f}bp<br>Z-score: {z_now:+.2f}"
+                hover[j][i] = f"{entities[i]} − {entities[j]}<br>스프레드: {-sp_now:+.1f}bp<br>Z-score: {-z_now:+.2f}"
+                pair_n += 1
                 if abs(z_now) >= z_thresh:
                     breach_n += 1
-        z_grid.append(z_row); sp_grid.append(sp_row)
-        text_z.append(tz_row); text_sp.append(ts_row)
-        hover.append(hv_row)
+            else:
+                hover[i][j] = f"{entities[j]} vs {entities[i]}: 데이터 없음"
+                hover[j][i] = f"{entities[i]} vs {entities[j]}: 데이터 없음"
 
     st.markdown(
         f'<div style="background:#F7F8F5;border-radius:6px;padding:14px 18px;'
         f'border-left:4px solid {DEEP_GREEN};margin:12px 0">'
         f'<div style="font-size:11px;color:#888;margin-bottom:4px">종합</div>'
         f'<div style="font-size:14px;font-weight:600;color:{DEEP_GREEN}">'
-        f'{total_n}개 계열 중 {breach_n}개 임계값(±{z_thresh}) 초과 &nbsp;|&nbsp; '
-        f'기준: {base_cat} {tenor}</div></div>',
+        f'{pair_n}개 쌍 중 {breach_n}개 임계값(±{z_thresh}) 초과 &nbsp;|&nbsp; '
+        f'{n}개 계열 x {tenor}</div></div>',
         unsafe_allow_html=True,
     )
+    st.caption("셀 = (열 계열) − (행 계열) 스프레드. 색상은 Z-score(±3 기준), 텍스트는 스프레드(bp)와 Z-score.")
 
-    def _heatmap(z: list, text: list, hover_text: list, suffix: str, zmid: float | None) -> go.Figure:
-        fig = go.Figure(go.Heatmap(
-            z=z, x=ratings_present, y=sel_sectors,
-            text=text, texttemplate="%{text}",
-            hovertext=hover_text, hoverinfo="text",
-            colorscale=HEATMAP_DIVERG, zmid=zmid, showscale=True,
-            colorbar=dict(title=dict(text=suffix, side="right"), thickness=12, len=0.8),
-            textfont=dict(size=11),
-        ))
-        fig.update_layout(
-            height=max(260, len(sel_sectors) * 42 + 60),
-            margin=dict(l=110, r=30, t=10, b=30),
-            font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=11),
-            xaxis=dict(side="top"),
-            plot_bgcolor="white", paper_bgcolor="white",
-        )
-        return fig
-
-    st.markdown("#### Z-score 히트맵")
-    fig_z = _heatmap(z_grid, text_z, hover, "Z", zmid=0)
-    st.plotly_chart(fig_z, use_container_width=True, config=PLOTLY_CONFIG)
-
-    st.markdown("#### 스프레드 히트맵 (bp)")
-    fig_sp = _heatmap(sp_grid, text_sp, hover, "bp", zmid=None)
-    st.plotly_chart(fig_sp, use_container_width=True, config=PLOTLY_CONFIG)
+    fig = go.Figure(go.Heatmap(
+        z=z_mat.tolist(), x=entities, y=entities,
+        text=text, texttemplate="%{text}",
+        hovertext=hover, hoverinfo="text",
+        colorscale=HEATMAP_DIVERG, zmid=0, zmin=-3, zmax=3, showscale=True,
+        colorbar=dict(title=dict(text="Z", side="right"), thickness=12, len=0.8),
+        textfont=dict(size=max(7, 11 - n // 6)),
+    ))
+    fig.update_layout(
+        height=max(400, n * 34 + 60),
+        margin=dict(l=140, r=30, t=10, b=10),
+        font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=10),
+        xaxis=dict(side="top", tickangle=-45),
+        yaxis=dict(autorange="reversed"),
+        plot_bgcolor="white", paper_bgcolor="white",
+    )
+    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
