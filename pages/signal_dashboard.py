@@ -7,7 +7,7 @@ import streamlit as st
 
 from assets.styles import DEEP_GREEN, HEATMAP_DIVERG
 from data.loader import TENOR_LABELS, POLICY_RATE_SECTOR
-from chart_utils import PLOTLY_CONFIG, date_range_picker
+from chart_utils import PLOTLY_CONFIG, date_range_picker, sector_tenor_picker
 
 _RATING_ORDER = [
     "AAA", "AA+", "AA", "AA-", "A+", "A", "A-",
@@ -37,6 +37,22 @@ def _sector_series(df: pd.DataFrame, sector: str, tenor: str) -> pd.Series:
     if s.empty:
         return pd.Series(dtype=float)
     return s.groupby("date")["yield"].mean().sort_index()
+
+
+def entities_from_pairs(dff: pd.DataFrame, pairs: list[tuple[str, str]]) -> pd.DataFrame:
+    """Build one row per (category, tenor) present for each checked (sector, tenor) pair."""
+    rows = []
+    for sector, tenor in pairs:
+        sub = dff[(dff["sector"] == sector) & (dff["tenor"] == tenor)]
+        if sub.empty:
+            continue
+        for cat, rating in sub[["category", "rating"]].drop_duplicates().itertuples(index=False):
+            rows.append({"label": f"{cat} {tenor}", "category": cat, "tenor": tenor,
+                         "sector": sector, "rating": rating})
+    cols = ["label", "category", "tenor", "sector", "rating"]
+    if not rows:
+        return pd.DataFrame(columns=cols).set_index("label")
+    return pd.DataFrame(rows, columns=cols).drop_duplicates(subset="label").set_index("label")
 
 
 def _rolling_z(spread: pd.Series, window: int) -> pd.Series:
@@ -136,47 +152,43 @@ def render(df: pd.DataFrame) -> None:
         st.warning("선택한 기간에 데이터가 없습니다.")
         return
 
-    c1, c2, c3 = st.columns(3)
-    tenor = c1.selectbox("만기", TENOR_LABELS,
-                          index=TENOR_LABELS.index("3Y") if "3Y" in TENOR_LABELS else 0,
-                          key="sig_tenor")
-    z_window = c2.number_input("Z-score 산출기간 (영업일)", value=60, min_value=10, max_value=500, key="sig_zwin")
-    z_thresh = c3.number_input("Z-score 임계값", value=2.0, min_value=0.5, max_value=5.0, step=0.1, key="sig_zthresh")
+    c1, c2 = st.columns(2)
+    z_window = c1.number_input("Z-score 산출기간 (영업일)", value=60, min_value=10, max_value=500, key="sig_zwin")
+    z_thresh = c2.number_input("Z-score 임계값", value=2.0, min_value=0.5, max_value=5.0, step=0.1, key="sig_zthresh")
 
     all_sectors = sorted(s for s in dff["sector"].unique() if s != POLICY_RATE_SECTOR)
     if not all_sectors:
         st.warning("표시할 계열이 없습니다.")
         return
 
-    sel_sectors = st.multiselect(
-        "표시할 섹터 (해제하면 매트릭스에서 제외)", all_sectors,
-        default=all_sectors, key="sig_sectors",
-    )
-    if not sel_sectors:
-        st.info("표시할 섹터를 하나 이상 선택하세요.")
+    pairs = sector_tenor_picker(all_sectors, TENOR_LABELS, "sig", default="single",
+                                 default_tenor="3Y" if "3Y" in TENOR_LABELS else None)
+    if not pairs:
+        st.info("표시할 섹터 x 만기 조합을 하나 이상 선택하세요.")
         return
 
-    tdf = dff[(dff["tenor"] == tenor) & (dff["sector"].isin(sel_sectors))]
-    if tdf.empty:
-        st.warning(f"선택한 섹터에 {tenor} 데이터가 없습니다.")
+    # -- Entity (category x maturity) matrix ---------------------------------
+    ent_df = entities_from_pairs(dff, pairs)
+    if ent_df.empty:
+        st.warning("선택한 조합에 데이터가 없습니다.")
         return
 
-    # -- Entity (sector x rating) matrix ------------------------------------
-    cat_info = tdf[["category", "sector", "rating"]].drop_duplicates().set_index("category")
-    sector_rank = {s: i for i, s in enumerate(sel_sectors)}
+    sector_rank = {s: i for i, s in enumerate(all_sectors)}
+    tenor_rank = {t: i for i, t in enumerate(TENOR_LABELS)}
 
-    def _entity_key(cat: str) -> tuple:
-        info = cat_info.loc[cat]
-        return (sector_rank.get(info["sector"], 999), _rating_sort_key(info["rating"]))
+    def _entity_key(label: str) -> tuple:
+        row = ent_df.loc[label]
+        return (sector_rank.get(row["sector"], 999), tenor_rank.get(row["tenor"], 999),
+                _rating_sort_key(row["rating"]))
 
-    entities = sorted(cat_info.index.unique().tolist(), key=_entity_key)
+    entities = sorted(ent_df.index.tolist(), key=_entity_key)
     if len(entities) < 2:
         st.warning("비교할 계열이 2개 이상 필요합니다.")
         return
     if len(entities) > 30:
-        st.caption(f"⚠ {len(entities)}개 계열이 선택되어 매트릭스가 큽니다. 섹터를 줄이면 더 보기 편합니다.")
+        st.caption(f"⚠ {len(entities)}개 계열이 선택되어 매트릭스가 큽니다. 조합을 줄이면 더 보기 편합니다.")
 
-    entity_series = {cat: _series(dff, cat, tenor) for cat in entities}
+    entity_series = {lbl: _series(dff, ent_df.loc[lbl, "category"], ent_df.loc[lbl, "tenor"]) for lbl in entities}
     z_mat, sp_mat, text, hover, breach_n, pair_n = _pairwise_matrix(entities, entity_series, int(z_window), z_thresh)
 
     st.markdown(
@@ -185,25 +197,32 @@ def render(df: pd.DataFrame) -> None:
         f'<div style="font-size:11px;color:#888;margin-bottom:4px">종합</div>'
         f'<div style="font-size:14px;font-weight:600;color:{DEEP_GREEN}">'
         f'{pair_n}개 쌍 중 {breach_n}개 임계값(±{z_thresh}) 초과 &nbsp;|&nbsp; '
-        f'{len(entities)}개 계열 x {tenor}</div></div>',
+        f'{len(entities)}개 계열 ({len(pairs)}개 섹터 x 만기 조합)</div></div>',
         unsafe_allow_html=True,
     )
-    st.markdown("#### 계열(섹터 x 등급) 매트릭스")
+    st.markdown("#### 계열(섹터 x 등급 x 만기) 매트릭스")
     st.caption("셀 = (열 계열) − (행 계열) 스프레드. 색상은 Z-score(±3 기준), 텍스트는 스프레드(bp)와 Z-score.")
     _render_heatmap(entities, z_mat, text, hover)
 
     # -- Sector-only matrix (rating ignored) ---------------------------------
     st.markdown("---")
     st.markdown("#### 섹터 매트릭스 (등급 무시, 섹터 내 평균)")
-    st.caption("등급을 무시하고 섹터 내 모든 계열의 평균 금리로 계산한 섹터 간 상대 스프레드입니다.")
+    st.caption("등급을 무시하고 섹터 내 모든 계열의 평균 금리로 계산한, 선택한 섹터 x 만기 조합 간 상대 스프레드입니다.")
 
-    sectors_for_matrix = [s for s in sel_sectors if not _sector_series(tdf, s, tenor).empty]
-    if len(sectors_for_matrix) < 2:
-        st.info("섹터 매트릭스를 표시하려면 유효한 섹터가 2개 이상 필요합니다.")
+    sec_rows = []
+    for sector, tenor in pairs:
+        ser = _sector_series(dff, sector, tenor)
+        if not ser.empty:
+            sec_rows.append((sector, tenor, f"{sector} {tenor}"))
+    sec_rows.sort(key=lambda r: (sector_rank.get(r[0], 999), tenor_rank.get(r[1], 999)))
+    sector_labels = [r[2] for r in sec_rows]
+    sector_series_map = {r[2]: _sector_series(dff, r[0], r[1]) for r in sec_rows}
+
+    if len(sector_labels) < 2:
+        st.info("섹터 매트릭스를 표시하려면 유효한 섹터 x 만기 조합이 2개 이상 필요합니다.")
     else:
-        sector_series = {s: _sector_series(dff, s, tenor) for s in sectors_for_matrix}
         zs_mat, sps_mat, text_s, hover_s, breach_s, pair_s = _pairwise_matrix(
-            sectors_for_matrix, sector_series, int(z_window), z_thresh
+            sector_labels, sector_series_map, int(z_window), z_thresh
         )
         st.caption(f"{pair_s}개 쌍 중 {breach_s}개 임계값(±{z_thresh}) 초과")
-        _render_heatmap(sectors_for_matrix, zs_mat, text_s, hover_s)
+        _render_heatmap(sector_labels, zs_mat, text_s, hover_s)
