@@ -1,5 +1,7 @@
 """Page: Signal Dashboard — entity x entity and sector x sector spread / Z-score matrices."""
 
+import copy
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -154,24 +156,48 @@ def _latest_yield(dff: pd.DataFrame, cat: str, tenor: str) -> float:
 
 
 def _render_heatmap(names: list[str], z_mat: np.ndarray, text: list, hover: list) -> None:
+    """Render a square Z-score heatmap, degrading cell-text density as the
+    matrix grows so numbers never overlap: full "bp + Z" text up to 10
+    names, Z-only past that, and color/hover only once it's too dense for
+    any text to stay legible. The PNG export is also sized to the matrix
+    (the app's default export size is tuned for small line charts, not a
+    dense heatmap) so downloaded images stay readable too.
+    """
     n = len(names)
-    fig = go.Figure(go.Heatmap(
+    if n <= 10:
+        cell_text, font_size = text, 12
+    elif n <= 20:
+        cell_text = [[f"{v:+.1f}" if not np.isnan(v) else "" for v in row] for row in z_mat]
+        font_size = 10
+    else:
+        cell_text, font_size = None, 10
+        st.caption(f"⚠ {n}개 계열로 셀이 조밀해 숫자 표시는 생략했습니다 — 마우스오버로 값을 확인하거나 계열을 줄여보세요.")
+
+    heatmap_kwargs = dict(
         z=z_mat.tolist(), x=names, y=names,
-        text=text, texttemplate="%{text}",
         hovertext=hover, hoverinfo="text",
         colorscale=HEATMAP_DIVERG, zmid=0, zmin=-3, zmax=3, showscale=True,
         colorbar=dict(title=dict(text="Z", side="right"), thickness=12, len=0.8),
-        textfont=dict(size=max(7, 11 - n // 6)),
-    ))
+    )
+    if cell_text is not None:
+        heatmap_kwargs.update(text=cell_text, texttemplate="%{text}", textfont=dict(size=font_size))
+
+    fig = go.Figure(go.Heatmap(**heatmap_kwargs))
+    cell_px = 60 if n <= 10 else 42
     fig.update_layout(
-        height=max(320, n * 34 + 60),
-        margin=dict(l=140, r=30, t=10, b=10),
-        font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=10),
+        height=max(320, n * cell_px + 90),
+        margin=dict(l=150, r=30, t=10, b=10),
+        font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=11),
         xaxis=dict(side="top", tickangle=-45),
         yaxis=dict(autorange="reversed"),
         plot_bgcolor="white", paper_bgcolor="white",
     )
-    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+
+    export_cfg = copy.deepcopy(PLOTLY_CONFIG)
+    export_cfg["toImageButtonOptions"]["width"] = max(640, n * 90)
+    export_cfg["toImageButtonOptions"]["height"] = max(390, n * 90)
+    export_cfg["toImageButtonOptions"]["scale"] = 2
+    st.plotly_chart(fig, use_container_width=True, config=export_cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +250,6 @@ def render(df: pd.DataFrame) -> None:
     if len(entities) < 2:
         st.warning("비교할 계열이 2개 이상 필요합니다.")
         return
-    if len(entities) > 30:
-        st.caption(f"⚠ {len(entities)}개 계열이 선택되어 매트릭스가 큽니다. 조합을 줄이면 더 보기 편합니다.")
 
     entity_series = {lbl: _series(dff, ent_df.loc[lbl, "category"], ent_df.loc[lbl, "tenor"]) for lbl in entities}
     z_mat, sp_mat, text, hover, breach_n, pair_n = _pairwise_matrix(entities, entity_series, int(z_window), z_thresh)
@@ -338,19 +362,32 @@ def render(df: pd.DataFrame) -> None:
     )
     st.caption("셀 = (스프레드 vs 기준, bp) ÷ (듀레이션, 년). 값이 클수록 위험(듀레이션) 대비 캐리가 두텁다는 의미입니다.")
 
-    dur_fig = go.Figure(go.Heatmap(
+    n_dur = len(dur_entities)
+    dur_cell_text = dur_text
+    if n_dur > 25:
+        dur_cell_text = None
+        st.caption(f"⚠ {n_dur}개 계열로 셀이 조밀해 숫자 표시는 생략했습니다 — 마우스오버로 값을 확인하거나 계열을 줄여보세요.")
+
+    dur_heatmap_kwargs = dict(
         z=dur_z_mat.tolist(), x=dur_sel_tenors, y=dur_entities,
-        text=dur_text, texttemplate="%{text}",
         hovertext=dur_hover, hoverinfo="text",
         colorscale=HEATMAP_DIVERG, zmid=0, showscale=True,
         colorbar=dict(title=dict(text="bp/y", side="right"), thickness=12, len=0.8),
-        textfont=dict(size=10),
-    ))
+    )
+    if dur_cell_text is not None:
+        dur_heatmap_kwargs.update(text=dur_cell_text, texttemplate="%{text}", textfont=dict(size=11))
+
+    dur_fig = go.Figure(go.Heatmap(**dur_heatmap_kwargs))
     dur_fig.update_layout(
-        height=max(320, len(dur_entities) * 34 + 60),
-        margin=dict(l=140, r=30, t=10, b=10),
+        height=max(320, n_dur * 40 + 90),
+        margin=dict(l=150, r=30, t=10, b=10),
         font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=11),
         xaxis=dict(side="top"),
         plot_bgcolor="white", paper_bgcolor="white",
     )
-    st.plotly_chart(dur_fig, use_container_width=True, config=PLOTLY_CONFIG)
+
+    dur_export_cfg = copy.deepcopy(PLOTLY_CONFIG)
+    dur_export_cfg["toImageButtonOptions"]["width"] = max(640, len(dur_sel_tenors) * 110)
+    dur_export_cfg["toImageButtonOptions"]["height"] = max(390, n_dur * 70)
+    dur_export_cfg["toImageButtonOptions"]["scale"] = 2
+    st.plotly_chart(dur_fig, use_container_width=True, config=dur_export_cfg)
