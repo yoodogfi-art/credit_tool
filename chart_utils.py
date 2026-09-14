@@ -130,10 +130,9 @@ def sector_tenor_picker(
     """One "계열"-style multiselect of sectors per maturity, laid out in a
     grid so every maturity is its own clearly-labeled, always-visible
     control (a single flat "sector maturity" multiselect made it easy to
-    lose track of which maturities were actually selected). Each maturity
-    gets its own small "전체" button to select every sector for just that
-    maturity — deselecting is a normal multiselect interaction, so there's
-    no separate clear button.
+    lose track of which maturities were actually selected). Each multiselect
+    already has its own select-all and per-item clear ("x") affordance built
+    in, so no extra buttons are added here.
 
     default="all" preselects every sector for every maturity; default="single"
     preselects every sector only for default_tenor (falls back to the first
@@ -149,22 +148,12 @@ def sector_tenor_picker(
             row_tenors = tenors[row_start:row_start + per_row]
             cols = st.columns(len(row_tenors))
             for col, tenor in zip(cols, row_tenors):
-                tenor_key = f"{key}_tenor_{tenor}"
+                if default == "all" or (default == "single" and tenor == default_tenor):
+                    widget_default = list(sectors)
+                else:
+                    widget_default = []
                 with col:
-                    if st.button("전체", key=f"{tenor_key}_all", use_container_width=True,
-                                 help=f"{tenor}: 전체 섹터 선택"):
-                        st.session_state[tenor_key] = list(sectors)
-                    # Only pass `default` before session_state holds a value
-                    # for this widget (first render) — once it exists (from
-                    # a prior run or the 전체 button above), passing both
-                    # triggers a Streamlit widget-policy warning.
-                    kwargs = {}
-                    if tenor_key not in st.session_state:
-                        if default == "all" or (default == "single" and tenor == default_tenor):
-                            kwargs["default"] = list(sectors)
-                        else:
-                            kwargs["default"] = []
-                    sel = st.multiselect(tenor, sectors, key=tenor_key, **kwargs)
+                    sel = st.multiselect(tenor, sectors, default=widget_default, key=f"{key}_tenor_{tenor}")
                 pairs.extend((s, tenor) for s in sel)
 
     return pairs
