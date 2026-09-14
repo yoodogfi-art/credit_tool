@@ -120,28 +120,30 @@ def date_range_picker(
     return pd.Timestamp(start_d), pd.Timestamp(end_d)
 
 
-def sector_tenor_picker(
-    sectors: list[str],
+def category_tenor_picker(
+    categories: list[str],
     tenors: list[str],
     key: str,
     default: str = "single",
     default_tenor: str | None = None,
 ) -> list[tuple[str, str]]:
-    """One "계열"-style multiselect of sectors per maturity, laid out in a
-    grid so every maturity is its own clearly-labeled, always-visible
-    control (a single flat "sector maturity" multiselect made it easy to
-    lose track of which maturities were actually selected). Each multiselect
-    already has its own select-all and per-item clear ("x") affordance built
-    in, so no extra buttons are added here.
+    """One "계열"-style multiselect per maturity, laid out in a grid so
+    every maturity is its own clearly-labeled, always-visible control (a
+    single flat "category maturity" multiselect made it easy to lose track
+    of which maturities were actually selected). Options are individual
+    categories — sector + rating, e.g. "공사채 AAA", "공사채 AA-" — not bare
+    sector names, so specific ratings can be included or excluded directly.
+    Each multiselect already has its own select-all and per-item clear
+    ("x") affordance built in, so no extra buttons are added here.
 
-    default="all" preselects every sector for every maturity; default="single"
-    preselects every sector only for default_tenor (falls back to the first
-    tenor), leaving other maturities empty. Returns the selected (sector,
-    tenor) pairs.
+    default="all" preselects every category for every maturity; default="single"
+    preselects every category only for default_tenor (falls back to the
+    first tenor), leaving other maturities empty. Returns the selected
+    (category, tenor) pairs.
     """
     default_tenor = default_tenor if default_tenor in tenors else (tenors[0] if tenors else None)
 
-    with st.expander("섹터 x 만기 선택 (만기별로 표시할 섹터를 선택하세요)", expanded=True):
+    with st.expander("계열 x 만기 선택 (만기별로 표시할 계열을 선택하세요)", expanded=True):
         pairs: list[tuple[str, str]] = []
         per_row = 5
         for row_start in range(0, len(tenors), per_row):
@@ -149,11 +151,11 @@ def sector_tenor_picker(
             cols = st.columns(len(row_tenors))
             for col, tenor in zip(cols, row_tenors):
                 if default == "all" or (default == "single" and tenor == default_tenor):
-                    widget_default = list(sectors)
+                    widget_default = list(categories)
                 else:
                     widget_default = []
                 with col:
-                    sel = st.multiselect(tenor, sectors, default=widget_default, key=f"{key}_tenor_{tenor}")
-                pairs.extend((s, tenor) for s in sel)
+                    sel = st.multiselect(tenor, categories, default=widget_default, key=f"{key}_tenor_{tenor}")
+                pairs.extend((c, tenor) for c in sel)
 
     return pairs

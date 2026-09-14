@@ -7,7 +7,7 @@ import streamlit as st
 
 from assets.styles import DEEP_GREEN, HEATMAP_DIVERG
 from data.loader import TENOR_LABELS, POLICY_RATE_SECTOR
-from chart_utils import PLOTLY_CONFIG, date_range_picker, sector_tenor_picker
+from chart_utils import PLOTLY_CONFIG, date_range_picker, category_tenor_picker
 
 _RATING_ORDER = [
     "AAA", "AA+", "AA", "AA-", "A+", "A", "A-",
@@ -41,16 +41,18 @@ def _sector_series(df: pd.DataFrame, sector: str, tenor: str) -> pd.Series:
     return s.groupby("date")["yield"].mean().sort_index()
 
 
-def entities_from_pairs(dff: pd.DataFrame, pairs: list[tuple[str, str]]) -> pd.DataFrame:
-    """Build one row per (category, tenor) present for each checked (sector, tenor) pair."""
+def entities_from_pairs(dff: pd.DataFrame, pairs: list[tuple[str, str]],
+                         cat_meta: pd.DataFrame) -> pd.DataFrame:
+    """Build one row per checked (category, tenor) pair that has data."""
     rows = []
-    for sector, tenor in pairs:
-        sub = dff[(dff["sector"] == sector) & (dff["tenor"] == tenor)]
-        if sub.empty:
+    for cat, tenor in pairs:
+        if cat not in cat_meta.index:
             continue
-        for cat, rating in sub[["category", "rating"]].drop_duplicates().itertuples(index=False):
-            rows.append({"label": f"{cat} {tenor}", "category": cat, "tenor": tenor,
-                         "sector": sector, "rating": rating})
+        if dff[(dff["category"] == cat) & (dff["tenor"] == tenor)].empty:
+            continue
+        info = cat_meta.loc[cat]
+        rows.append({"label": f"{cat} {tenor}", "category": cat, "tenor": tenor,
+                     "sector": info["sector"], "rating": info["rating"]})
     cols = ["label", "category", "tenor", "sector", "rating"]
     if not rows:
         return pd.DataFrame(columns=cols).set_index("label")
@@ -190,25 +192,28 @@ def render(df: pd.DataFrame) -> None:
     z_window = c1.number_input("Z-score 산출기간 (영업일)", value=60, min_value=10, max_value=500, key="sig_zwin")
     z_thresh = c2.number_input("Z-score 임계값", value=2.0, min_value=0.5, max_value=5.0, step=0.1, key="sig_zthresh")
 
-    all_sectors = sorted(s for s in dff["sector"].unique() if s != POLICY_RATE_SECTOR)
-    if not all_sectors:
+    bond_df = dff[dff["sector"] != POLICY_RATE_SECTOR]
+    all_cats = sorted(bond_df["category"].unique().tolist())
+    if not all_cats:
         st.warning("표시할 계열이 없습니다.")
         return
+    cat_meta = bond_df[["category", "sector", "rating"]].drop_duplicates().set_index("category")
 
-    pairs = sector_tenor_picker(all_sectors, TENOR_LABELS, "sig", default="single",
-                                 default_tenor="3Y" if "3Y" in TENOR_LABELS else None)
+    all_sectors = sorted(bond_df["sector"].unique())
+    sector_rank = {s: i for i, s in enumerate(all_sectors)}
+    tenor_rank = {t: i for i, t in enumerate(TENOR_LABELS)}
+
+    pairs = category_tenor_picker(all_cats, TENOR_LABELS, "sig", default="single",
+                                   default_tenor="3Y" if "3Y" in TENOR_LABELS else None)
     if not pairs:
-        st.info("표시할 섹터 x 만기 조합을 하나 이상 선택하세요.")
+        st.info("표시할 계열 x 만기 조합을 하나 이상 선택하세요.")
         return
 
     # -- Entity (category x maturity) matrix ---------------------------------
-    ent_df = entities_from_pairs(dff, pairs)
+    ent_df = entities_from_pairs(dff, pairs, cat_meta)
     if ent_df.empty:
         st.warning("선택한 조합에 데이터가 없습니다.")
         return
-
-    sector_rank = {s: i for i, s in enumerate(all_sectors)}
-    tenor_rank = {t: i for i, t in enumerate(TENOR_LABELS)}
 
     def _entity_key(label: str) -> tuple:
         row = ent_df.loc[label]
@@ -231,7 +236,7 @@ def render(df: pd.DataFrame) -> None:
         f'<div style="font-size:11px;color:#888;margin-bottom:4px">종합</div>'
         f'<div style="font-size:14px;font-weight:600;color:{DEEP_GREEN}">'
         f'{pair_n}개 쌍 중 {breach_n}개 임계값(±{z_thresh}) 초과 &nbsp;|&nbsp; '
-        f'{len(entities)}개 계열 ({len(pairs)}개 섹터 x 만기 조합)</div></div>',
+        f'{len(entities)}개 계열 ({len(pairs)}개 계열 x 만기 조합)</div></div>',
         unsafe_allow_html=True,
     )
     st.markdown("#### 계열(섹터 x 등급 x 만기) 매트릭스")
@@ -241,10 +246,17 @@ def render(df: pd.DataFrame) -> None:
     # -- Sector-only matrix (rating ignored) ---------------------------------
     st.markdown("---")
     st.markdown("#### 섹터 매트릭스 (등급 무시, 섹터 내 평균)")
-    st.caption("등급을 무시하고 섹터 내 모든 계열의 평균 금리로 계산한, 선택한 섹터 x 만기 조합 간 상대 스프레드입니다.")
+    st.caption("등급을 무시하고 섹터 내 모든 계열의 평균 금리로 계산한, 선택한 계열 x 만기 조합의 섹터 간 상대 스프레드입니다.")
 
+    sec_seen = set()
     sec_rows = []
-    for sector, tenor in pairs:
+    for cat, tenor in pairs:
+        if cat not in cat_meta.index:
+            continue
+        sector = cat_meta.loc[cat, "sector"]
+        if (sector, tenor) in sec_seen:
+            continue
+        sec_seen.add((sector, tenor))
         ser = _sector_series(dff, sector, tenor)
         if not ser.empty:
             sec_rows.append((sector, tenor, f"{sector} {tenor}"))
@@ -266,34 +278,26 @@ def render(df: pd.DataFrame) -> None:
     st.markdown("### Duration Spread")
     st.caption("스프레드 ÷ 조정 듀레이션(6개월 이표, 액면발행 가정) — 만기별 스프레드의 '위험 대비 캐리'를 비교합니다.")
 
-    all_cats = sorted(dff["category"].unique().tolist())
     default_base = next((c for c in all_cats if "국고채" in c), all_cats[0])
     base_cat = st.selectbox("기준(Base) 계열", all_cats,
                              index=all_cats.index(default_base) if default_base in all_cats else 0,
                              key="dur_base_cat")
 
-    dur_pairs = sector_tenor_picker(all_sectors, TENOR_LABELS, "dur", default="all")
+    dur_pairs = category_tenor_picker(all_cats, TENOR_LABELS, "dur", default="all")
     if not dur_pairs:
-        st.info("표시할 섹터 x 만기 조합을 하나 이상 선택하세요.")
+        st.info("표시할 계열 x 만기 조합을 하나 이상 선택하세요.")
         return
-
-    dur_sel_sectors = sorted({s for s, _ in dur_pairs}, key=all_sectors.index)
-    dur_sel_tenors = sorted({t for _, t in dur_pairs}, key=TENOR_LABELS.index)
-
-    dur_cat_df = dff[dff["sector"].isin(dur_sel_sectors)][["category", "sector", "rating"]].drop_duplicates()
-    dur_cat_df = dur_cat_df[dur_cat_df["category"] != base_cat]
-    if dur_cat_df.empty:
-        st.warning("표시할 계열이 없습니다.")
-        return
-
-    dur_sector_rank = {s: i for i, s in enumerate(dur_sel_sectors)}
-    dur_cat_info = dur_cat_df.set_index("category")
 
     def _dur_entity_key(cat: str) -> tuple:
-        info = dur_cat_info.loc[cat]
-        return (dur_sector_rank.get(info["sector"], 999), _rating_sort_key(info["rating"]))
+        info = cat_meta.loc[cat]
+        return (sector_rank.get(info["sector"], 999), _rating_sort_key(info["rating"]))
 
-    dur_entities = sorted(dur_cat_info.index.unique().tolist(), key=_dur_entity_key)
+    dur_entities = sorted({c for c, _ in dur_pairs if c != base_cat}, key=_dur_entity_key)
+    dur_sel_tenors = sorted({t for _, t in dur_pairs}, key=TENOR_LABELS.index)
+
+    if not dur_entities:
+        st.warning("표시할 계열이 없습니다.")
+        return
 
     dur_z_mat = np.full((len(dur_entities), len(dur_sel_tenors)), np.nan)
     dur_text = [["" for _ in dur_sel_tenors] for _ in dur_entities]
