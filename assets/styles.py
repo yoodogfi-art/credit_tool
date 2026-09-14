@@ -54,7 +54,6 @@ h3 { color: #4A5E35 !important; font-weight: 600 !important; }
 .stTabs [aria-selected="true"] {
     background-color: #F7F8F5 !important;
     color: #2D3F38 !important;
-    border-bottom: 2px solid #4E9B5A !important;
     font-weight: 600 !important;
 }
 hr { border-color: #DDE4D8 !important; margin: 12px 0 !important; }
