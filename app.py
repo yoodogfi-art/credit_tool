@@ -1,4 +1,4 @@
-"""Credit Research Engine — main entry point."""
+ """Credit Research Engine — main entry point."""
 
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
