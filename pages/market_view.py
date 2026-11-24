@@ -1,6 +1,5 @@
 """Page: Market View"""
 
-import copy
 import datetime
 
 import numpy as np
@@ -11,7 +10,7 @@ from plotly.subplots import make_subplots
 
 from assets.styles import CHART_COLORS, CORAL, DEEP_GREEN, OLIVE, POLICY_COLOR, POLICY_FILL_COLOR
 from data.loader import TENOR_LABELS, get_bond_data, get_policy_rate
-from chart_utils import PLOTLY_CONFIG, base_layout, date_range_picker
+from chart_utils import base_layout, date_range_picker, show_chart
 
 _TENOR_ORDER = {t: i for i, t in enumerate(TENOR_LABELS)}
 _GREEN_SHADES = ["#2D3F38", "#4A5E35", "#4E9B5A", "#8DC175", "#8DD5C8", "#DDE8C0",
@@ -257,38 +256,11 @@ def _tab_spread(df: pd.DataFrame) -> None:
     if use_sec:
         _add_policy_traces(fig, pr_df, d_start, d_end, secondary_y=True)
 
-    # --- Title shown in the app only (kept OUT of the downloaded PNG) ---
-    chart_title = f"{cat_a} {tenor} 금리 및 스프레드"
-    st.markdown(
-        f'<div style="font-weight:700;color:{DEEP_GREEN};font-size:14px;margin:4px 0 2px">'
-        f"{chart_title}</div>",
-        unsafe_allow_html=True,
-    )
-
-    base_layout(fig, "", 470)  # empty layout title -> no title in export
-    # Move the legend below the plot so series/legend never overlap the data
-    fig.update_layout(
-        legend=dict(
-            orientation="h",
-            yanchor="top",
-            y=-0.18,
-            xanchor="center",
-            x=0.5,
-            font=dict(size=12, color="#1A1A1A"),
-            bgcolor="rgba(255,255,255,0)",
-            borderwidth=0,
-        ),
-        margin=dict(l=58, r=64, t=20, b=80),
-    )
+    base_layout(fig, "", 470)
     fig.update_yaxes(title_text="스프레드(bp)", ticksuffix="bp", secondary_y=False, rangemode="tozero")
     fig.update_yaxes(title_text="금리(%)", ticksuffix="%", secondary_y=True, showgrid=False)
-
-    # Per-tab export config: PNG uses the (empty) layout title, so no title is baked in.
-    spread_cfg = copy.deepcopy(PLOTLY_CONFIG)
-    spread_cfg["toImageButtonOptions"]["filename"] = f"spread_{cat_a}_{tenor}".replace(" ", "_")
-    spread_cfg["toImageButtonOptions"]["height"] = 470
-
-    st.plotly_chart(fig, use_container_width=True, config=spread_cfg)
+    show_chart(fig, f"{cat_a} vs {cat_b} {tenor} 스프레드",
+               subtitle=f"{d_start:%Y-%m-%d} ~ {d_end:%Y-%m-%d}")
 
     last_sp = merged["sp"].iloc[-1]
     avg_sp  = merged["sp"].mean()
@@ -307,7 +279,7 @@ def _tab_spread(df: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 # Tab 3: Curve & Change
 # ---------------------------------------------------------------------------
-def _single_curve(df: pd.DataFrame, cat: str, d1: pd.Timestamp, d2: pd.Timestamp) -> None:
+def _single_curve(df: pd.DataFrame, cat: str, d1: pd.Timestamp, d2: pd.Timestamp, panel: int = 0) -> None:
     bond_df = get_bond_data(df)
     avail   = bond_df[bond_df["category"] == cat]["date"].unique()
     if len(avail) == 0:
@@ -337,7 +309,7 @@ def _single_curve(df: pd.DataFrame, cat: str, d1: pd.Timestamp, d2: pd.Timestamp
             x=common_t, y=chg_bp, name="변동(bp)",
             marker_color=bar_colors, marker_line_width=0, opacity=0.8,
             text=[f"{v:+.1f}" if abs(v) >= max(abs(x) for x in chg_bp) * 0.3 else "" for v in chg_bp],
-            textposition="outside", cliponaxis=False,
+            textposition="outside", cliponaxis=False, textfont=dict(size=10),
             hovertemplate="%{x}: %{y:+.2f}bp<extra></extra>",
         ),
         secondary_y=False,
@@ -361,23 +333,16 @@ def _single_curve(df: pd.DataFrame, cat: str, d1: pd.Timestamp, d2: pd.Timestamp
             secondary_y=True,
         )
 
-    max_abs = max(abs(v) for v in chg_bp) if chg_bp else 1
-    fig.update_layout(
-        template="plotly_white", height=400, bargap=0.3,
-        font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=12),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11)),
-        margin=dict(l=65, r=75, t=36, b=44),
-        plot_bgcolor="white", paper_bgcolor="white", hovermode="x unified",
-        xaxis=dict(categoryorder="array", categoryarray=TENOR_LABELS, showgrid=False,
-                   showline=True, linecolor="#BDBDBD"),
-    )
+    max_abs = max((abs(v) for v in chg_bp), default=1) or 1
+    base_layout(fig, "", 400)
+    fig.update_layout(bargap=0.3, uniformtext=dict(minsize=9, mode="hide"))
+    fig.update_xaxes(categoryorder="array", categoryarray=TENOR_LABELS)
     fig.update_yaxes(title_text="변동(bp)", ticksuffix="bp", secondary_y=False,
                      range=[-max_abs * 1.6, max_abs * 1.6],
                      zeroline=True, zerolinecolor="#AAAAAA", showgrid=True, gridcolor="#EEEEEE")
     fig.update_yaxes(title_text="금리(%)", ticksuffix="%", secondary_y=True,
                      showgrid=False)
-    st.markdown(f"**{cat}** — {ad1.strftime('%Y-%m-%d')} vs {ad2.strftime('%Y-%m-%d')}")
-    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+    show_chart(fig, f"{cat} 커브 변동 {ad1:%Y-%m-%d} vs {ad2:%Y-%m-%d}", key=f"curve_panel_{panel}")
 
 
 def _tab_curve(df: pd.DataFrame) -> None:
@@ -412,7 +377,7 @@ def _tab_curve(df: pd.DataFrame) -> None:
                 index=all_cats.index(defaults[i]) if defaults[i] in all_cats else 0,
                 key=f"cv_cat_{i}",
             )
-            _single_curve(df, cat, d1, d2)
+            _single_curve(df, cat, d1, d2, panel=i)
 
 
 # ---------------------------------------------------------------------------
@@ -451,12 +416,12 @@ def _tab_timeseries(df: pd.DataFrame) -> None:
     if use_sec:
         _add_policy_traces(fig, pr_df, d_start, d_end, secondary_y=True)
 
-    base_layout(fig, f"금리 시계열 | {ts_tenor}", 430)
+    base_layout(fig, "", 430)
     fig.update_yaxes(title_text="금리(%)", ticksuffix="%", secondary_y=False)
     if use_sec:
         fig.update_yaxes(title_text="기준금리(%)", ticksuffix="%", secondary_y=True,
-                         showgrid=False, tickfont=dict(color=DEEP_GREEN))
-    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                         showgrid=False)
+    show_chart(fig, f"금리 시계열 {ts_tenor}", subtitle=f"{d_start:%Y-%m-%d} ~ {d_end:%Y-%m-%d}")
 
     # Bar: latest levels
     lv = [
@@ -470,10 +435,17 @@ def _tab_timeseries(df: pd.DataFrame) -> None:
             x=lv_df["금리"], y=lv_df["계열"], orientation="h",
             marker_color=DEEP_GREEN,
             text=[f"{v:.3f}%" for v in lv_df["금리"]], textposition="outside",
+            cliponaxis=False, textfont=dict(size=11),
+            hovertemplate="%{y}: %{x:.3f}%<extra></extra>",
         ))
-        base_layout(fig2, f"최신 금리 비교 | {ts_tenor}", max(200, len(lv) * 44 + 80))
-        fig2.update_xaxes(ticksuffix="%")
-        st.plotly_chart(fig2, use_container_width=True, config=PLOTLY_CONFIG)
+        base_layout(fig2, "", max(220, len(lv) * 40 + 60))
+        lo, hi = lv_df["금리"].min(), lv_df["금리"].max()
+        pad = max((hi - lo) * 0.25, 0.05)
+        fig2.update_xaxes(ticksuffix="%", range=[max(0, lo - pad * 2), hi + pad], showgrid=True, gridcolor="#E6E6E6")
+        fig2.update_yaxes(showgrid=False)
+        fig2.update_layout(hovermode="closest")
+        show_chart(fig2, f"최신 금리 비교 {ts_tenor}", legend="none",
+                   export_h=max(260, len(lv) * 40 + 60))
 
     st.markdown("---")
     st.markdown("##### 만기별 금리 추이")
@@ -489,9 +461,9 @@ def _tab_timeseries(df: pd.DataFrame) -> None:
             fig3.add_trace(go.Scatter(x=s["date"], y=s["yield"], name=tn,
                 line=dict(color=_GREEN_SHADES[i % len(_GREEN_SHADES)], width=1.8),
                 hovertemplate=f"{tn}: %{{y:.3f}}%<extra></extra>"))
-    base_layout(fig3, f"만기별 금리 | {mt_cat}", 400)
+    base_layout(fig3, "", 400)
     fig3.update_yaxes(ticksuffix="%")
-    st.plotly_chart(fig3, use_container_width=True, config=PLOTLY_CONFIG)
+    show_chart(fig3, f"{mt_cat} 만기별 금리 추이", subtitle=f"{d_s2:%Y-%m-%d} ~ {d_e2:%Y-%m-%d}")
 
 
 # ---------------------------------------------------------------------------
@@ -523,12 +495,11 @@ def _tab_policy(df: pd.DataFrame) -> None:
             line_shape="hv", fill="tozeroy", fillcolor="rgba(45,63,56,0.07)",
             hovertemplate="%{y:.2f}%<extra></extra>",
         ))
-    base_layout(fig, "기준금리 추이", 360)
+    base_layout(fig, "", 360)
     fig.update_yaxes(ticksuffix="%")
-    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+    show_chart(fig, "기준금리 추이", subtitle=f"{d_start:%Y-%m-%d} ~ {d_end:%Y-%m-%d}")
 
     st.markdown("---")
-    st.markdown("#### 기준금리 vs 채권 금리")
     c1, c2 = st.columns([3, 1])
     cmp_cats  = c1.multiselect("비교 채권 계열 (최대 4개)", all_cats,
         default=[c for c in all_cats if "국고채" in c or "공사/공단채 AAA" in c][:2],
@@ -555,9 +526,9 @@ def _tab_policy(df: pd.DataFrame) -> None:
             line=dict(color=CHART_COLORS[i % len(CHART_COLORS)], width=2),
             hovertemplate="%{y:.3f}%<extra></extra>",
         ))
-    base_layout(fig2, f"기준금리 vs 채권 금리 ({cmp_tenor})", 420)
+    base_layout(fig2, "", 420)
     fig2.update_yaxes(ticksuffix="%")
-    st.plotly_chart(fig2, use_container_width=True, config=PLOTLY_CONFIG)
+    show_chart(fig2, f"기준금리 vs 채권 금리 {cmp_tenor}", subtitle=f"{d_start:%Y-%m-%d} ~ {d_end:%Y-%m-%d}")
 
 
 # ---------------------------------------------------------------------------

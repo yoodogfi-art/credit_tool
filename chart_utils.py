@@ -1,6 +1,8 @@
 """Shared Plotly layout helpers used across pages."""
 
+import copy
 import datetime
+import re
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -9,80 +11,140 @@ import streamlit as st
 from assets.styles import DEEP_GREEN, PLOTLY_TEMPLATE
 
 # ---------------------------------------------------------------------------
-# Export config — sized for 8 charts per A4 page
+# Export / display rules
 #
-# Strategy: small base dimensions (640×390) so the chart occupies roughly
-# 1/8 of an A4 when inserted into Word/PPT at its natural size.
-# scale=3 gives 1920×1170 px — enough resolution for crisp print without
-# the fonts becoming illegible at the final small print size.
-#
-# Font sizes are deliberately large relative to the canvas so they stay
-# readable when the image is placed at ~95×68 mm on paper.
+# * The chart title is shown on the page only (as HTML above the chart). The
+#   downloaded PNG contains just the chart; the title becomes the file name.
+# * PNG export is rendered at a small fixed canvas (EXPORT_W x EXPORT_H CSS px,
+#   x EXPORT_SCALE for resolution) so it drops into Word/PPT at ~1/8 A4 without
+#   shrinking the text. Fonts are px-based, so a small canvas = relatively
+#   large, readable text.
+# * Legend sits above the plot area (outside it, auto-expanding the top
+#   margin) and every axis uses automargin, so tick labels, axis titles and
+#   legend entries never overlap each other or the data.
 # ---------------------------------------------------------------------------
+EXPORT_W, EXPORT_H, EXPORT_SCALE = 640, 400, 3
+FONT_FAMILY = "Apple SD Gothic Neo, Noto Sans KR, Malgun Gothic, sans-serif"
+
 PLOTLY_CONFIG = dict(
     toImageButtonOptions=dict(
-        format="png",
-        filename="chart",
-        scale=3,          # 640*3 = 1920 px wide — sharp at small print size
-        width=640,        # ~95 mm at 170 dpi; fits 2-up on A4
-        height=390,       # ~68 mm; fits 4-down on A4  (2×4 = 8 per page)
+        format="png", filename="chart",
+        scale=EXPORT_SCALE, width=EXPORT_W, height=EXPORT_H,
     ),
     displayModeBar=True,
+    displaylogo=False,
     modeBarButtonsToRemove=["select2d", "lasso2d"],
 )
 
-# Text colors — use near-black so nothing fades at small size
-_TICK_COLOR   = "#1A1A1A"   # axis tick labels
-_LABEL_COLOR  = "#1A1A1A"   # axis titles
-_TITLE_COLOR  = DEEP_GREEN  # chart title (already dark green)
+_TICK_COLOR   = "#1A1A1A"
+_LABEL_COLOR  = "#1A1A1A"
 _LEGEND_COLOR = "#1A1A1A"
+
+_BAD_FN_CHARS = re.compile(r'[\:*?"<>|\r\n\t]+')
+
+
+def safe_filename(title: str) -> str:
+    """Turn a chart title (Korean or English) into a download-safe file name."""
+    name = re.sub(r"<[^>]+>", "", title or "chart")          # strip HTML tags
+    name = re.sub(r"\s*[|·]\s*", "_", name)                  # "a | b" -> "a_b"
+    name = name.replace("/", "-")
+    name = _BAD_FN_CHARS.sub("", name)
+    name = re.sub(r"\s+", "_", name)
+    name = re.sub(r"_+", "_", name).strip("._ ")
+    return (name or "chart")[:120]
+
+
+def export_config(title: str, width: int | None = None, height: int | None = None,
+                  scale: int | None = None) -> dict:
+    cfg = copy.deepcopy(PLOTLY_CONFIG)
+    opts = cfg["toImageButtonOptions"]
+    opts["filename"] = safe_filename(title)
+    if width:
+        opts["width"] = width
+    if height:
+        opts["height"] = height
+    if scale:
+        opts["scale"] = scale
+    return cfg
+
+
+def chart_title(title: str, subtitle: str = "") -> None:
+    sub = (f'<span style="font-weight:400;color:#757575;font-size:12px;margin-left:8px">'
+           f'{subtitle}</span>') if subtitle else ""
+    st.markdown(
+        f'<div style="font-weight:700;color:{DEEP_GREEN};font-size:14px;margin:6px 0 0">'
+        f'{title}{sub}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def tidy_for_export(fig: go.Figure, legend: str = "top") -> go.Figure:
+    """Strip the in-figure title and apply overlap-free spacing rules."""
+    fig.update_layout(title=None)
+    fig.update_xaxes(automargin=True)
+    fig.update_yaxes(automargin=True)
+    # rate axes: fixed 2 decimals (avoids ticks like 4.527% on secondary axes)
+    fig.for_each_xaxis(lambda a: a.update(tickformat=".2f") if a.ticksuffix == "%" and not a.tickformat else None)
+    fig.for_each_yaxis(lambda a: a.update(tickformat=".2f") if a.ticksuffix == "%" and not a.tickformat else None)
+    if legend == "top":
+        fig.update_layout(legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+            font=dict(size=11, color=_LEGEND_COLOR),
+            bgcolor="rgba(255,255,255,0)", borderwidth=0,
+            itemsizing="constant", tracegroupgap=0,
+        ))
+    elif legend == "none":
+        fig.update_layout(showlegend=False)
+    return fig
+
+
+def show_chart(fig: go.Figure, title: str, *, subtitle: str = "",
+               legend: str = "top", export_w: int | None = None,
+               export_h: int | None = None, export_scale: int | None = None,
+               fixed_size: bool = False, key: str | None = None) -> None:
+    """Render a chart: title on the page (not in the PNG), PNG named after it.
+
+    fixed_size=True keeps the figure's own width (heatmaps that need fixed
+    cell space); otherwise the chart stretches to the container on screen and
+    exports at the small default canvas.
+    """
+    chart_title(title, subtitle)
+    tidy_for_export(fig, legend)
+    cfg = export_config(title, export_w, export_h, export_scale)
+    st.plotly_chart(fig, width="content" if fixed_size else "stretch",
+                    config=cfg, key=key)
 
 
 def base_layout(fig: go.Figure, title: str = "", height: int = 420) -> go.Figure:
+    """Shared look. `title` is ignored inside the figure (shown on page via
+    show_chart instead); kept as a parameter for call-site compatibility."""
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
         height=height,
-        title=dict(
-            text=f"<b>{title}</b>",
-            font=dict(color=_TITLE_COLOR, size=14, family="Apple SD Gothic Neo, Noto Sans KR, sans-serif"),
-            x=0,
-        ),
-        font=dict(
-            family="Apple SD Gothic Neo, Noto Sans KR, sans-serif",
-            size=13,        # base font — governs legend & hover text
-            color=_LEGEND_COLOR,
-        ),
+        title=None,
+        font=dict(family=FONT_FAMILY, size=12, color=_LEGEND_COLOR),
         legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-            font=dict(size=12, color=_LEGEND_COLOR),
-            bgcolor="rgba(255,255,255,0.90)",
-            bordercolor="#C8C8C8",
-            borderwidth=1,
+            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+            font=dict(size=11, color=_LEGEND_COLOR),
+            bgcolor="rgba(255,255,255,0)", borderwidth=0,
         ),
-        # Tighter margins so the data area takes more of the small canvas
-        margin=dict(l=58, r=64, t=46, b=40),
+        margin=dict(l=10, r=10, t=10, b=10),
         plot_bgcolor="white",
         paper_bgcolor="white",
         hovermode="x unified",
     )
     fig.update_xaxes(
-        showgrid=False,
-        showline=True,
-        linecolor="#AAAAAA",
-        linewidth=1.5,
-        tickfont=dict(size=12, color=_TICK_COLOR),
-        title_font=dict(size=12, color=_LABEL_COLOR),
+        showgrid=False, showline=True, linecolor="#AAAAAA", linewidth=1.2,
+        tickfont=dict(size=11, color=_TICK_COLOR),
+        title_font=dict(size=11, color=_LABEL_COLOR),
+        automargin=True,
     )
     fig.update_yaxes(
-        showgrid=True,
-        gridcolor="#E2E2E2",
-        gridwidth=1,
-        tickfont=dict(size=12, color=_TICK_COLOR),
-        title_font=dict(size=12, color=_LABEL_COLOR),
+        showgrid=True, gridcolor="#E6E6E6", gridwidth=1,
+        tickfont=dict(size=11, color=_TICK_COLOR),
+        title_font=dict(size=11, color=_LABEL_COLOR),
+        title_standoff=6,
+        automargin=True,
     )
     return fig
 
@@ -120,42 +182,54 @@ def date_range_picker(
     return pd.Timestamp(start_d), pd.Timestamp(end_d)
 
 
-def category_tenor_picker(
-    categories: list[str],
-    tenors: list[str],
+_SECTOR_ORDER = ["국고채", "통안채", "공사/공단채", "은행채", "카드채", "기타금융채", "회사채"]
+_RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-"]
+_NO_RATING = "무등급"
+
+
+def _order(values, pref):
+    return sorted(values, key=lambda v: (pref.index(v) if v in pref else len(pref), v))
+
+
+def segment_picker(
+    bond_df: pd.DataFrame,
     key: str,
-    default: str = "single",
-    default_tenor: str | None = None,
+    default_tenors: list[str] | None = None,
+    tenor_options: list[str] | None = None,
+    exclude_cats: tuple[str, ...] = (),
 ) -> list[tuple[str, str]]:
-    """One "계열"-style multiselect per maturity, laid out in a grid so
-    every maturity is its own clearly-labeled, always-visible control (a
-    single flat "category maturity" multiselect made it easy to lose track
-    of which maturities were actually selected). Options are individual
-    categories — sector + rating, e.g. "공사채 AAA", "공사채 AA-" — not bare
-    sector names, so specific ratings can be included or excluded directly.
-    Each multiselect already has its own select-all and per-item clear
-    ("x") affordance built in, so no extra buttons are added here.
+    """Pick (category, tenor) pairs with three rows of toggle pills —
+    섹터 / 등급 / 만기 — instead of one multiselect per tenor.
 
-    default="all" preselects every category for every maturity; default="single"
-    preselects every category only for default_tenor (falls back to the
-    first tenor), leaving other maturities empty. Returns the selected
-    (category, tenor) pairs.
+    Only tenors that actually exist in the uploaded data are offered (or the
+    given tenor_options, e.g. the base series' tenors), and only
+    (category, tenor) combinations with data are returned. A collapsed
+    "개별 계열 제외" box handles one-off exclusions.
     """
-    default_tenor = default_tenor if default_tenor in tenors else (tenors[0] if tenors else None)
+    from data.loader import TENOR_LABELS  # local import: avoid cycle at module load
 
-    with st.expander("계열 x 만기 선택 (만기별로 표시할 계열을 선택하세요)", expanded=True):
-        pairs: list[tuple[str, str]] = []
-        per_row = 5
-        for row_start in range(0, len(tenors), per_row):
-            row_tenors = tenors[row_start:row_start + per_row]
-            cols = st.columns(len(row_tenors))
-            for col, tenor in zip(cols, row_tenors):
-                if default == "all" or (default == "single" and tenor == default_tenor):
-                    widget_default = list(categories)
-                else:
-                    widget_default = []
-                with col:
-                    sel = st.multiselect(tenor, categories, default=widget_default, key=f"{key}_tenor_{tenor}")
-                pairs.extend((c, tenor) for c in sel)
+    meta = bond_df[["category", "sector", "rating"]].drop_duplicates("category")
+    meta = meta[~meta["category"].isin(exclude_cats)]
+    have = set(map(tuple, bond_df[["category", "tenor"]].drop_duplicates().to_numpy()))
 
-    return pairs
+    sectors = _order(meta["sector"].unique().tolist(), _SECTOR_ORDER)
+    ratings = _order([r or _NO_RATING for r in meta["rating"].unique()], _RATING_ORDER + [_NO_RATING])
+    tenors = [t for t in TENOR_LABELS if t in set(bond_df["tenor"])]
+    if tenor_options is not None:
+        tenors = [t for t in tenors if t in tenor_options]
+    d_ten = [t for t in (default_tenors or tenors) if t in tenors] or tenors[:1]
+
+    with st.container(border=True):
+        sel_sec = st.pills("섹터", sectors, selection_mode="multi", default=sectors, key=f"{key}_sec")
+        sel_rat = st.pills("등급", ratings, selection_mode="multi", default=ratings, key=f"{key}_rat")
+        sel_ten = st.pills("만기", tenors, selection_mode="multi", default=d_ten, key=f"{key}_ten")
+        cand = meta[meta["sector"].isin(sel_sec or []) &
+                    meta["rating"].replace("", _NO_RATING).isin(sel_rat or [])]
+        cand_cats = _order(cand["category"].tolist(), [])
+        with st.expander(f"개별 계열 제외 (현재 {len(cand_cats)}개 계열)", expanded=False):
+            excl = st.multiselect("제외할 계열", cand_cats, default=[], key=f"{key}_excl",
+                                  label_visibility="collapsed")
+
+    tenor_idx = {t: i for i, t in enumerate(TENOR_LABELS)}
+    return [(c, t) for c in cand_cats if c not in excl
+            for t in sorted(sel_ten or [], key=tenor_idx.get) if (c, t) in have]

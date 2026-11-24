@@ -7,7 +7,7 @@ import streamlit as st
 
 from assets.styles import DEEP_GREEN, HEATMAP_RATE, HEATMAP_DIVERG, PLOTLY_TEMPLATE
 from data.loader import TENOR_LABELS
-from chart_utils import PLOTLY_CONFIG, date_range_picker
+from chart_utils import FONT_FAMILY, date_range_picker, show_chart
 
 _ALL_RATINGS = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-"]
 
@@ -130,19 +130,18 @@ def render(df: pd.DataFrame) -> None:
         colorscale=cs, showscale=True,
         colorbar=dict(title=dict(text=suffix, side="right"), thickness=12, len=0.8),
     ))
+    mx_h = max(280, len(sector_order) * 44 + 70)
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
-        height=max(280, len(sector_order) * 44 + 80),
-        title=dict(
-            text=f"섹터 매트릭스  |  {tenor}  |  {mode}  |  {dff['date'].max().strftime('%Y-%m-%d')}",
-            font=dict(color=DEEP_GREEN, size=13), x=0,
-        ),
-        font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=11),
-        margin=dict(l=120, r=30, t=48, b=30),
+        height=mx_h,
+        font=dict(family=FONT_FAMILY, size=11),
+        margin=dict(l=10, r=10, t=10, b=10),
         xaxis=dict(side="top"),
         plot_bgcolor="white", paper_bgcolor="white",
     )
-    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+    fig.update_traces(textfont=dict(size=11))
+    show_chart(fig, f"섹터 매트릭스 {tenor} {mode}", subtitle=dff["date"].max().strftime("%Y-%m-%d"),
+               legend="none", export_w=max(640, len(rating_order) * 62 + 160), export_h=mx_h, export_scale=2)
 
     # Data table
     rows = [
@@ -181,13 +180,15 @@ def render(df: pd.DataFrame) -> None:
             hovertemplate="%{y} %{x}: %{text}<extra></extra>",
             colorscale=cs2, showscale=True,
         ))
+        hm_h = max(280, len(hm_cats) * 30 + 70)
         fig2.update_layout(
             template=PLOTLY_TEMPLATE,
-            height=max(280, len(hm_cats) * 34 + 90),
-            title=dict(text=f"카테고리 x 만기  |  {hm_mode}", font=dict(color=DEEP_GREEN, size=13), x=0),
-            font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=10),
-            margin=dict(l=190, r=30, t=48, b=30),
+            height=hm_h,
+            font=dict(family=FONT_FAMILY, size=10),
+            margin=dict(l=10, r=10, t=10, b=10),
             xaxis=dict(side="top"),
             plot_bgcolor="white", paper_bgcolor="white",
         )
-        st.plotly_chart(fig2, use_container_width=True, config=PLOTLY_CONFIG)
+        fig2.update_traces(textfont=dict(size=10))
+        show_chart(fig2, f"계열 x 만기 히트맵 {hm_mode}", subtitle=dff["date"].max().strftime("%Y-%m-%d"),
+                   legend="none", export_w=900, export_h=hm_h, export_scale=2)

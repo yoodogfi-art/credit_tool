@@ -1,4 +1,4 @@
- """Credit Research Engine — main entry point."""
+"""Credit Research Engine — main entry point."""
 
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import streamlit as st
 from assets.styles import CSS, DEEP_GREEN
 from data.loader import load_excel
+from data.treasury_loader import load_treasury
 
 st.set_page_config(
     page_title="Credit Research Engine",
@@ -27,26 +28,56 @@ with st.sidebar:
     )
     st.divider()
     st.markdown("##### 데이터 업로드")
+    st.caption("① 크레딧 금리 (시가평가 3사평균 Wide-format)")
     uploaded = st.file_uploader(
-        "Excel 파일",
+        "크레딧 금리 Excel",
         type=["xlsx", "xls"],
-        help="시가평가 3사평균 Wide-format Excel",
+        help="시가평가 3사평균 Wide-format Excel — Market View / Sector Matrix / Signal Dashboard",
         label_visibility="collapsed",
+        key="up_credit",
     )
-    if uploaded:
-        st.success(f"{uploaded.name}")
-    else:
-        st.info("Excel 파일을 업로드하세요")
+    st.caption("② 국고채 종목별 금리 (Forward Rate용)")
+    uploaded_tsy = st.file_uploader(
+        "국고채 종목 Excel",
+        type=["xlsx", "xls"],
+        help="종목별 MATURITY / CPN / YIELD / DURATION 열이 있는 Excel (예: korean_treasury.xlsx)",
+        label_visibility="collapsed",
+        key="up_treasury",
+    )
 
     st.divider()
     st.markdown("##### 메뉴")
     page = st.radio(
         "페이지",
-        ["Market View", "Sector Matrix", "Signal Dashboard"],
+        ["Market View", "Sector Matrix", "Signal Dashboard", "Forward Rate"],
         label_visibility="collapsed",
     )
     st.divider()
-    st.caption("v0.3")
+    st.caption("v0.4")
+
+# ---------------------------------------------------------------------------
+# Forward Rate page — needs only the treasury file
+# ---------------------------------------------------------------------------
+if page == "Forward Rate":
+    if uploaded_tsy is None:
+        st.header("Forward Rate")
+        st.info("사이드바 ②에 국고채 종목별 금리 Excel(예: korean_treasury.xlsx)을 업로드하세요.")
+        st.stop()
+    with st.spinner("국고채 데이터 파싱 중..."):
+        try:
+            bonds, tsy_sources, tsy_warnings = load_treasury(uploaded_tsy.getvalue())
+        except Exception as e:
+            st.error(f"파일 로드 오류: {e}")
+            st.stop()
+    for msg in tsy_warnings:
+        if msg.startswith("__toast__"):
+            st.toast(msg[len("__toast__"):])
+        else:
+            st.warning(msg)
+    from pages.forward_rate import render as render_fwd
+    from data.treasury_loader import trade_date_from_filename
+    render_fwd(bonds, tsy_sources, trade_date_from_filename(uploaded_tsy.name))
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # Landing page (no file)
@@ -60,11 +91,12 @@ if uploaded is None:
         f'</div>',
         unsafe_allow_html=True,
     )
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     for col, title, desc in [
         (c1, "Market View",      "금리 시계열, 스프레드, 커브, 월간 변화 시각화"),
         (c2, "Sector Matrix",    "섹터 x 등급 x 만기 히트맵 + 자동 OW/NW/UW"),
         (c3, "Signal Dashboard", "스프레드 / Z-score 매트릭스 + Duration Spread"),
+        (c4, "Forward Rate",     "국고채 Spot·Forward 커브 (NS / Svensson / Spline / Bootstrap)"),
     ]:
         col.markdown(
             f'<div style="border:1px solid #DDE4D8;border-radius:6px;padding:18px;background:#F7F8F5">'

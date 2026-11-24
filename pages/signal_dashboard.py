@@ -1,6 +1,5 @@
 """Page: Signal Dashboard — entity x entity and sector x sector spread / Z-score matrices."""
 
-import copy
 
 import numpy as np
 import pandas as pd
@@ -9,7 +8,7 @@ import streamlit as st
 
 from assets.styles import DEEP_GREEN, HEATMAP_DIVERG
 from data.loader import TENOR_LABELS, POLICY_RATE_SECTOR
-from chart_utils import PLOTLY_CONFIG, date_range_picker, category_tenor_picker
+from chart_utils import FONT_FAMILY, date_range_picker, segment_picker, show_chart
 
 _RATING_ORDER = [
     "AAA", "AA+", "AA", "AA-", "A+", "A", "A-",
@@ -155,7 +154,8 @@ def _latest_yield(dff: pd.DataFrame, cat: str, tenor: str) -> float:
     return float(s.iloc[-1]["yield"]) if not s.empty else np.nan
 
 
-def _render_heatmap(names: list[str], z_mat: np.ndarray, text: list, hover: list) -> None:
+def _render_heatmap(names: list[str], z_mat: np.ndarray, text: list, hover: list,
+                    title: str = "스프레드 Z-score 매트릭스") -> None:
     """Render a square spread/Z-score heatmap. Every cell always shows both
     numbers (spread bp and Z) — legibility comes from giving each cell
     enough fixed pixel space, not from removing one of the numbers.
@@ -179,18 +179,14 @@ def _render_heatmap(names: list[str], z_mat: np.ndarray, text: list, hover: list
     ))
     fig.update_layout(
         width=fig_w, height=fig_h,
-        margin=dict(l=160, r=30, t=10, b=10),
-        font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=11),
+        margin=dict(l=10, r=10, t=10, b=10),
+        font=dict(family=FONT_FAMILY, size=11),
         xaxis=dict(side="top", tickangle=-45),
         yaxis=dict(autorange="reversed"),
         plot_bgcolor="white", paper_bgcolor="white",
     )
-
-    export_cfg = copy.deepcopy(PLOTLY_CONFIG)
-    export_cfg["toImageButtonOptions"]["width"] = fig_w
-    export_cfg["toImageButtonOptions"]["height"] = fig_h
-    export_cfg["toImageButtonOptions"]["scale"] = 2
-    st.plotly_chart(fig, use_container_width=False, config=export_cfg)
+    show_chart(fig, title, legend="none", fixed_size=True,
+               export_w=fig_w, export_h=fig_h, export_scale=2)
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +218,8 @@ def render(df: pd.DataFrame) -> None:
     sector_rank = {s: i for i, s in enumerate(all_sectors)}
     tenor_rank = {t: i for i, t in enumerate(TENOR_LABELS)}
 
-    pairs = category_tenor_picker(all_cats, TENOR_LABELS, "sig", default="single",
-                                   default_tenor="3Y" if "3Y" in TENOR_LABELS else None)
+    st.markdown("**계열 x 만기 선택** — 버튼을 눌러 켜고 끄세요")
+    pairs = segment_picker(bond_df, "sig", default_tenors=["3Y"])
     if not pairs:
         st.info("표시할 계열 x 만기 조합을 하나 이상 선택하세요.")
         return
@@ -256,13 +252,11 @@ def render(df: pd.DataFrame) -> None:
         f'{len(entities)}개 계열 ({len(pairs)}개 계열 x 만기 조합)</div></div>',
         unsafe_allow_html=True,
     )
-    st.markdown("#### 계열(섹터 x 등급 x 만기) 매트릭스")
     st.caption("셀 = (열 계열) − (행 계열) 스프레드. 색상은 Z-score(±3 기준), 텍스트는 스프레드(bp)와 Z-score.")
-    _render_heatmap(entities, z_mat, text, hover)
+    _render_heatmap(entities, z_mat, text, hover, "계열(섹터 x 등급 x 만기) 스프레드 매트릭스")
 
     # -- Sector-only matrix (rating ignored) ---------------------------------
     st.markdown("---")
-    st.markdown("#### 섹터 매트릭스 (등급 무시, 섹터 내 평균)")
     st.caption("등급을 무시하고 섹터 내 모든 계열의 평균 금리로 계산한, 선택한 계열 x 만기 조합의 섹터 간 상대 스프레드입니다.")
 
     sec_seen = set()
@@ -288,7 +282,7 @@ def render(df: pd.DataFrame) -> None:
             sector_labels, sector_series_map, int(z_window), z_thresh
         )
         st.caption(f"{pair_s}개 쌍 중 {breach_s}개 임계값(±{z_thresh}) 초과")
-        _render_heatmap(sector_labels, zs_mat, text_s, hover_s)
+        _render_heatmap(sector_labels, zs_mat, text_s, hover_s, "섹터 스프레드 매트릭스 (섹터 내 평균)")
 
     # -- Duration Spread -------------------------------------------------
     st.markdown("---")
@@ -300,7 +294,11 @@ def render(df: pd.DataFrame) -> None:
                              index=all_cats.index(default_base) if default_base in all_cats else 0,
                              key="dur_base_cat")
 
-    dur_pairs = category_tenor_picker(all_cats, TENOR_LABELS, "dur", default="all")
+    # only tenors the base series actually has — otherwise the spread is undefined
+    base_tenors = sorted(set(bond_df.loc[bond_df["category"] == base_cat, "tenor"]), key=TENOR_LABELS.index)
+    st.caption(f"{base_cat} 데이터가 있는 만기만 선택할 수 있습니다: {', '.join(base_tenors)}")
+    dur_pairs = segment_picker(bond_df, f"dur_{base_cat}", tenor_options=base_tenors,
+                               exclude_cats=(base_cat,))
     if not dur_pairs:
         st.info("표시할 계열 x 만기 조합을 하나 이상 선택하세요.")
         return
@@ -369,14 +367,10 @@ def render(df: pd.DataFrame) -> None:
     ))
     dur_fig.update_layout(
         width=dur_fig_w, height=dur_fig_h,
-        margin=dict(l=160, r=30, t=10, b=10),
-        font=dict(family="Apple SD Gothic Neo, Noto Sans KR, sans-serif", size=11),
+        margin=dict(l=10, r=10, t=10, b=10),
+        font=dict(family=FONT_FAMILY, size=11),
         xaxis=dict(side="top"),
         plot_bgcolor="white", paper_bgcolor="white",
     )
-
-    dur_export_cfg = copy.deepcopy(PLOTLY_CONFIG)
-    dur_export_cfg["toImageButtonOptions"]["width"] = dur_fig_w
-    dur_export_cfg["toImageButtonOptions"]["height"] = dur_fig_h
-    dur_export_cfg["toImageButtonOptions"]["scale"] = 2
-    st.plotly_chart(dur_fig, use_container_width=False, config=dur_export_cfg)
+    show_chart(dur_fig, f"Duration Spread vs {base_cat}", legend="none", fixed_size=True,
+               export_w=dur_fig_w, export_h=dur_fig_h, export_scale=2)
